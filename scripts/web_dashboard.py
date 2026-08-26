@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -2154,6 +2155,163 @@ def update_thumbnail_header(notice_key: str):
             "v": v,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# 모바일 앱용 JSON API
+#
+# nginx가 /api/ 경로는 Basic Auth 없이 통과시키는 대신, 아래 라우트는 모두
+# .env의 APP_API_KEY와 일치하는 X-API-Key 헤더를 요구한다.
+# ---------------------------------------------------------------------------
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_PATH / ".env")
+except Exception:
+    pass
+
+
+def _require_api_key() -> None:
+    expected = (os.environ.get("APP_API_KEY") or "").strip()
+    if not expected:
+        abort(503)
+    provided = request.headers.get("X-API-Key") or ""
+    if not secrets.compare_digest(provided, expected):
+        abort(401)
+
+
+def _api_notice_summary(notice: dict) -> dict:
+    generated = (notice.get("image_result") or {}).get("generated_images") or []
+    return {
+        "notice_key": notice.get("notice_key") or "",
+        "title": notice.get("title") or "",
+        "board_id": notice.get("board_id") or "default",
+        "board_name": notice.get("board_name") or notice.get("board_id") or "",
+        "date": notice.get("date") or "",
+        "crawled_at": notice.get("crawled_at") or "",
+        "url": notice.get("url") or "",
+        "image_count": len([p for p in generated if p]),
+        "posted": bool(notice.get("posted")),
+        "posted_at": notice.get("posted_at") or "",
+    }
+
+
+def _find_notice(notice_key: str) -> dict | None:
+    notices = load_notice_dict()
+    return notices.get(str(notice_key)) or next(
+        (v for v in notices.values() if v.get("notice_key") == notice_key),
+        None,
+    )
+
+
+@app.route("/api/notices")
+def api_notices():
+    _require_api_key()
+    notices = load_notices()
+    since = (request.args.get("since") or "").strip()
+    unposted_only = request.args.get("unposted") in ("1", "true", "yes")
+
+    items = []
+    for notice in notices:
+        summary = _api_notice_summary(notice)
+        if since and (summary["crawled_at"] or "") <= since:
+            continue
+        if unposted_only and summary["posted"]:
+            continue
+        items.append(summary)
+    return jsonify({"success": True, "count": len(items), "notices": items})
+
+
+@app.route("/api/notices/<path:notice_key>")
+def api_notice_detail(notice_key: str):
+    _require_api_key()
+    notice = _find_notice(notice_key)
+    if not notice:
+        return jsonify({"success": False, "error": "공지를 찾을 수 없습니다."}), 404
+
+    generated = (notice.get("image_result") or {}).get("generated_images") or []
+    images = []
+    for img_path in generated:
+        if not img_path:
+            continue
+        abs_path = _to_abs(img_path)
+        if not os.path.exists(abs_path):
+            continue
+        try:
+            v = int(os.path.getmtime(abs_path))
+        except Exception:
+            v = 0
+        images.append(
+            {
+                "url": f"/api/media/{_to_rel(abs_path)}?v={v}",
+                "name": os.path.basename(abs_path),
+            }
+        )
+
+    board_id = notice.get("board_id") or "default"
+    content = notice.get("content") or ""
+    detail = _api_notice_summary(notice)
+    detail["images"] = images
+    detail["copy_text"] = make_display_content(board_id, content)
+    detail["content"] = content
+    return jsonify({"success": True, "notice": detail})
+
+
+@app.route("/api/media/<path:rel_path>")
+def api_media(rel_path: str):
+    _require_api_key()
+    safe_path = _to_abs(rel_path)
+    if os.path.commonpath([str(BASE_PATH), safe_path]) != str(BASE_PATH):
+        abort(403)
+    if not os.path.exists(safe_path):
+        abort(404)
+    return send_file(safe_path)
+
+
+@app.route("/api/notices/<path:notice_key>/done", methods=["POST"])
+def api_mark_posted(notice_key: str):
+    _require_api_key()
+    payload = request.get_json(silent=True) or {}
+    posted = bool(payload.get("posted", True))
+
+    db_data = _load_json(NOTICE_DB_PATH)
+
+    def _apply(entry: dict) -> bool:
+        entry["posted"] = posted
+        entry["posted_at"] = datetime.now().isoformat(timespec="seconds") if posted else ""
+        return True
+
+    updated = False
+    if isinstance(db_data, dict):
+        entry = db_data.get(str(notice_key))
+        if isinstance(entry, dict) and _apply(entry):
+            updated = True
+        else:
+            for candidate in db_data.values():
+                if isinstance(candidate, dict) and candidate.get("notice_key") == notice_key:
+                    if _apply(candidate):
+                        updated = True
+                        break
+    elif isinstance(db_data, list):
+        for item in db_data:
+            if isinstance(item, dict) and item.get("notice_key") == notice_key:
+                if _apply(item):
+                    updated = True
+                    break
+    else:
+        return jsonify({"success": False, "error": "데이터 파일을 읽을 수 없습니다."}), 500
+
+    if not updated:
+        return jsonify({"success": False, "error": "데이터 파일에서 항목을 찾을 수 없습니다."}), 404
+
+    try:
+        with open(NOTICE_DB_PATH, "w", encoding="utf-8") as fh:
+            json.dump(db_data, fh, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return jsonify({"success": False, "error": f"데이터 저장 실패: {exc}"}), 500
+
+    return jsonify({"success": True, "posted": posted})
 
 
 def main() -> None:
