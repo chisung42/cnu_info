@@ -256,8 +256,10 @@ ADMIN_OPERATION_COMMANDS: dict[str, list[tuple[str, list[str]]]] = {
         ("디스크", ["df", "-h", BASE_DIR]),
     ],
     "logs": [
-        ("웹 대시보드 로그", ["journalctl", "-u", "cnu-info-web.service", "-n", "60", "--no-pager"]),
-        ("크롤러 로그", ["journalctl", "-u", "cnu-info-monitor.service", "-n", "60", "--no-pager"]),
+        # -r returns the newest journal entries first, matching the dashboard's
+        # live-monitoring use case: new events stay visible at the top.
+        ("웹 대시보드 로그 (최신순)", ["journalctl", "-r", "-u", "cnu-info-web.service", "-n", "60", "--no-pager"]),
+        ("크롤러 로그 (최신순)", ["journalctl", "-r", "-u", "cnu-info-monitor.service", "-n", "60", "--no-pager"]),
     ],
     "refresh_crawler": [
         (
@@ -541,7 +543,7 @@ TEMPLATE = """
             <p>허용된 작업만 실행됩니다. 임의 명령어 실행 기능은 제공하지 않습니다.</p>
             <div class="admin-actions">
                 <button type="button" data-admin-operation="status">상태 확인</button>
-                <button type="button" data-admin-operation="logs">최근 로그</button>
+                <button type="button" data-admin-operation="logs">최근 로그 (최신순)</button>
                 <button type="button" data-admin-operation="refresh_crawler">새로고침 (r)</button>
             </div>
             <pre id="admin-output">상태 확인을 누르면 서버 정보를 표시합니다.</pre>
