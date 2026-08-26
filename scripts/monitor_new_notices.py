@@ -463,6 +463,10 @@ def monitor(
         nonlocal links_db, details_db
 
         for board in boards:
+            # The dashboard can delete/hide notices while the monitor is
+            # waiting. Reload before every board so a stale in-memory copy
+            # never overwrites those operator changes on the next /r cycle.
+            links_db = _load_json_dict(LINKS_FILE)
             board_id = board["id"]
             board_name = board["name"]
             board_url = board["url"]
