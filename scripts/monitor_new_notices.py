@@ -252,7 +252,11 @@ def _send_telegram_notice(detail: dict, board_name: str) -> tuple[bool, str]:
     return _send_telegram_text(_telegram_message(detail, board_name))
 
 
-def _send_telegram_text(text: str) -> tuple[bool, str]:
+def _send_telegram_text(
+    text: str,
+    *,
+    disable_web_page_preview: bool = False,
+) -> tuple[bool, str]:
     """Send a plain-text message to the configured Telegram chat."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -265,7 +269,7 @@ def _send_telegram_text(text: str) -> tuple[bool, str]:
             json={
                 "chat_id": chat_id,
                 "text": text[:4096],
-                "disable_web_page_preview": False,
+                "disable_web_page_preview": disable_web_page_preview,
             },
             timeout=15,
         )
@@ -276,6 +280,41 @@ def _send_telegram_text(text: str) -> tuple[bool, str]:
         return True, "전송 완료"
     except (requests.RequestException, ValueError) as exc:
         return False, str(exc)
+
+
+def _split_telegram_text(text: str, limit: int = 4096) -> list[str]:
+    """Split a long body at paragraph/line boundaries without adding labels."""
+    remaining = text.strip()
+    chunks: list[str] = []
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        window = remaining[:limit]
+        split_at = max(window.rfind("\n\n"), window.rfind("\n"), window.rfind(" "))
+        if split_at < limit // 2:
+            split_at = limit
+        chunk = remaining[:split_at].rstrip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_at:].lstrip()
+    return chunks
+
+
+def _send_telegram_notice_body(detail: dict) -> tuple[bool, str]:
+    """Send only the crawled body text so it can be copied without cleanup."""
+    content = str(detail.get("content") or "").strip()
+    if not content:
+        return True, "전송할 본문 없음"
+    chunks = _split_telegram_text(content)
+    for chunk in chunks:
+        sent, result = _send_telegram_text(
+            chunk,
+            disable_web_page_preview=True,
+        )
+        if not sent:
+            return False, result
+    return True, f"본문 {len(chunks)}개 메시지 전송 완료"
 
 
 def _telegram_generated_images(detail: dict) -> list[Path]:
@@ -629,6 +668,11 @@ def monitor(
                             print(f"[텔레그램] {images_result}: {key}")
                         else:
                             print(f"[텔레그램 경고] 이미지 전송 실패 ({key}): {images_result}")
+                        body_sent, body_result = _send_telegram_notice_body(detail)
+                        if body_sent:
+                            print(f"[텔레그램] {body_result}: {key}")
+                        else:
+                            print(f"[텔레그램 경고] 본문 전송 실패 ({key}): {body_result}")
                     elif telegram_result != "텔레그램 설정 없음":
                         # Notification errors must not make the notice pending
                         # again, otherwise a temporary Telegram outage can spam.
