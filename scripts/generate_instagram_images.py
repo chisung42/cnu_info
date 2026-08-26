@@ -44,18 +44,12 @@ SUPPORTED_SOURCE_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 _PAGE_NUMBER_SUFFIX_PATTERN = re.compile(r"(?:[_-])(?P<digits>\d{2,4})$")
 LOGO_PATH = BASE_PATH / "assets" / "cnu_logo_white.png"
 PRETENDARD_FONT_PATH = BASE_PATH / "assets" / "fonts" / "Pretendard-Regular.otf"
-AGGRO_FONT_ENV = {
-    "bold": "CNU_AGGRO_BOLD_FONT_PATH",
-    "medium": "CNU_AGGRO_MEDIUM_FONT_PATH",
-    "light": "CNU_AGGRO_LIGHT_FONT_PATH",
-}
 
 
-def _load_font(size: int, variant: str = "medium") -> ImageFont.ImageFont:
-    """Load a configured Aggro face, then fall back to bundled Pretendard."""
-    aggro_path = os.getenv(AGGRO_FONT_ENV.get(variant, ""), "").strip()
+def _load_font(size: int) -> ImageFont.ImageFont:
+    # Bundle Pretendard so macOS and Linux render identical Korean notice cards.
+    # Noto/Apple system fonts remain fallbacks for older checkouts.
     candidates = [
-        (aggro_path, 0),
         (str(PRETENDARD_FONT_PATH), 0),
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 1),
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
@@ -64,8 +58,6 @@ def _load_font(size: int, variant: str = "medium") -> ImageFont.ImageFont:
         ("/System/Library/Fonts/Arial.ttf", 0),
     ]
     for path, index in candidates:
-        if not path:
-            continue
         try:
             return ImageFont.truetype(path, size, index=index)
         except Exception:
@@ -232,8 +224,8 @@ def generate_notice_thumbnail_header(
     )
 
     img_width, img_height = 1080, 1350
-    header_font = _load_font(90, "bold")
-    date_font = _load_font(60, "light")
+    header_font = _load_font(90)
+    date_font = _load_font(60)
 
     attachment_root_abs = _to_abs(attachment_root)
     attachment_path = Path(attachment_root_abs)
@@ -295,9 +287,9 @@ def generate_notice_images(
     url = notice.get("url") or "URL 없음"
 
     img_width, img_height = 1080, 1350
-    header_font = _load_font(90, "bold")
-    body_font = _load_font(70, "medium")
-    date_font = _load_font(60, "light")
+    header_font = _load_font(90)
+    body_font = _load_font(70)
+    date_font = _load_font(60)
 
     attachment_root_abs = _to_abs(attachment_root)
     attachment_path = Path(attachment_root_abs)

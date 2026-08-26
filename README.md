@@ -74,7 +74,6 @@ python scripts/monitor_new_notices.py --interval 30
 - `--workers`로 신규 공지를 동시에 처리할 작업 수를 조절합니다(기본 4). 크롤링, 첨부 변환, 결과 이미지 생성은 병렬 처리되고 JSON 저장은 순차 처리됩니다.
 - `--boards-config`에 JSON 파일을 지정하면 `DEFAULT_BOARDS` 대신 사용자 정의 게시판 목록을 사용할 수 있습니다.
 - 공지 카드 이미지는 프로젝트에 포함된 `assets/fonts/Pretendard-Regular.otf`를 사용해 맥·서버에서 동일하게 렌더링됩니다. 글꼴 라이선스는 같은 폴더의 `LICENSE-Pretendard.txt`에 포함돼 있습니다.
-- 서버의 `.env`에 `CNU_AGGRO_BOLD_FONT_PATH`, `CNU_AGGRO_MEDIUM_FONT_PATH`, `CNU_AGGRO_LIGHT_FONT_PATH`를 설정하면, 해당 비공개 글꼴 파일을 카드 이미지의 제목·본문·날짜에 각각 사용합니다.
 
 ### 텔레그램 신규 공지 알림
 
