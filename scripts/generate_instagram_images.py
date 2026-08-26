@@ -50,8 +50,8 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     # Prefer an installed Korean Noto face on Linux; otherwise Pillow falls back
     # to its bitmap default font and Hangul becomes tofu squares.
     candidates = [
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 4),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 4),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 1),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
         ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
         ("/System/Library/Fonts/AppleGothic.ttf", 0),
         ("/System/Library/Fonts/Arial.ttf", 0),
