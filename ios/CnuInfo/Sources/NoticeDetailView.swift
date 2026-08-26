@@ -11,30 +11,27 @@ struct NoticeDetailView: View {
     @State private var isWorking = false
     @State private var workStatus = ""
     @State private var showDoneConfirm = false
+    @State private var viewerIndex: Int?
 
     private let api = APIClient()
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 20) {
                 if let detail {
-                    imageCarousel(detail)
+                    header(detail)
                     actionButtons(detail)
-                    Text(detail.copyText)
-                        .font(.footnote)
-                        .textSelection(.enabled)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    photoGrid(detail)
+                    copyTextSection(detail)
                 } else if let errorMessage {
                     ContentUnavailableView("불러오기 실패", systemImage: "wifi.exclamationmark", description: Text(errorMessage))
                 } else {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 200)
                 }
             }
-            .padding()
+            .padding(16)
         }
+        .background(Color(.systemGroupedBackground))
         .navigationTitle(summary.boardName)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
@@ -50,31 +47,108 @@ struct NoticeDetailView: View {
                     ProgressView()
                     Text(workStatus).font(.footnote)
                 }
-                .padding(10)
-                .background(.thinMaterial, in: Capsule())
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.regularMaterial, in: Capsule())
                 .padding(.bottom, 20)
             }
+        }
+        .fullScreenCover(item: $viewerIndex) { index in
+            PhotoViewer(images: previews, startIndex: index)
+        }
+    }
+
+    // MARK: - Sections
+
+    private func header(_ detail: NoticeDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: BoardStyle.symbol(for: summary.boardId))
+                    .font(.caption2)
+                Text(detail.boardName)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(BoardStyle.color(for: summary.boardId).gradient)
+            .clipShape(Capsule())
+
+            Text(detail.title)
+                .font(.title3.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 4) {
+                Text(detail.date)
+                if detail.posted {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("업로드 완료").foregroundStyle(.green)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
-    private func imageCarousel(_ detail: NoticeDetail) -> some View {
-        if !previews.isEmpty {
-            TabView {
-                ForEach(Array(previews.enumerated()), id: \.offset) { _, img in
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFit()
+    private func photoGrid(_ detail: NoticeDetail) -> some View {
+        if detail.images.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("사진")
+                        .font(.headline)
+                    Text("\(detail.images.count)장")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                if previews.isEmpty {
+                    ProgressView("이미지 불러오는 중…")
+                        .frame(maxWidth: .infinity, minHeight: 140)
+                } else {
+                    let columns = [GridItem(.adaptive(minimum: 104), spacing: 3)]
+                    LazyVGrid(columns: columns, spacing: 3) {
+                        ForEach(Array(previews.enumerated()), id: \.offset) { index, image in
+                            Button {
+                                viewerIndex = index
+                            } label: {
+                                Color.clear
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .overlay(
+                                        Image(uiImage: image)
+                                            .resizable()
+                                            .scaledToFill()
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                    .contentShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("photo-thumb-\(index)")
+                        }
+                    }
                 }
             }
-            .tabViewStyle(.page)
-            .frame(height: 360)
-            .background(Color(.secondarySystemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-        } else if !detail.images.isEmpty {
-            ProgressView("이미지 불러오는 중…")
-                .frame(maxWidth: .infinity, minHeight: 200)
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
+    }
+
+    private func copyTextSection(_ detail: NoticeDetail) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("업로드용 본문")
+                .font(.headline)
+            Text(detail.copyText)
+                .font(.footnote)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     @ViewBuilder
@@ -84,10 +158,12 @@ struct NoticeDetailView: View {
                 Task { await saveAndOpenInstagram(detail) }
             } label: {
                 Label("저장하고 인스타그램 열기", systemImage: "square.and.arrow.down.on.square")
+                    .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 12))
             .disabled(isWorking || detail.images.isEmpty)
 
             HStack(spacing: 10) {
@@ -98,6 +174,7 @@ struct NoticeDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.roundedRectangle(radius: 10))
 
                 Button {
                     Task { await markDone(!detail.posted) }
@@ -106,6 +183,7 @@ struct NoticeDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .buttonBorderShape(.roundedRectangle(radius: 10))
 
                 if let pageURL = URL(string: detail.url), !detail.url.isEmpty {
                     Link(destination: pageURL) {
@@ -113,11 +191,14 @@ struct NoticeDetailView: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    .buttonBorderShape(.roundedRectangle(radius: 10))
                 }
             }
             .font(.footnote)
         }
     }
+
+    // MARK: - Actions
 
     private func load() async {
         do {
@@ -128,9 +209,9 @@ struct NoticeDetailView: View {
                 if let data = try? await api.downloadImage(path: image.url),
                    let ui = UIImage(data: data) {
                     loaded.append(ui)
+                    previews = loaded
                 }
             }
-            previews = loaded
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -186,5 +267,61 @@ struct NoticeDetailView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+extension Int: @retroactive Identifiable {
+    public var id: Int { self }
+}
+
+// MARK: - 전체화면 사진 뷰어
+
+private struct PhotoViewer: View {
+    let images: [UIImage]
+    let startIndex: Int
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var index: Int = 0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $index) {
+                ForEach(Array(images.enumerated()), id: \.offset) { i, image in
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .tag(i)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+
+            VStack {
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(10)
+                            .background(.ultraThinMaterial.opacity(0.6), in: Circle())
+                    }
+                    .accessibilityIdentifier("photo-viewer-close")
+                    Spacer()
+                    Text("\(index + 1) / \(images.count)")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial.opacity(0.6), in: Capsule())
+                }
+                .padding(.horizontal, 16)
+                Spacer()
+            }
+        }
+        .onAppear { index = startIndex }
+        .statusBarHidden()
     }
 }

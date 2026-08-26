@@ -6,11 +6,25 @@ struct NoticeListView: View {
     @State private var errorMessage: String?
     @State private var showPostedToo = false
     @State private var showSettings = false
+    @State private var selectedBoard: String?
 
     private let api = APIClient()
 
+    private var boards: [(id: String, name: String)] {
+        var seen = Set<String>()
+        var result: [(id: String, name: String)] = []
+        for notice in notices where !seen.contains(notice.boardId) {
+            seen.insert(notice.boardId)
+            result.append((notice.boardId, notice.boardName))
+        }
+        return result.sorted { $0.name < $1.name }
+    }
+
     private var visibleNotices: [NoticeSummary] {
-        showPostedToo ? notices : notices.filter { !$0.posted }
+        notices.filter { notice in
+            (showPostedToo || !notice.posted)
+                && (selectedBoard == nil || notice.boardId == selectedBoard)
+        }
     }
 
     var body: some View {
@@ -19,7 +33,7 @@ struct NoticeListView: View {
                 if AppSettings.apiKey.isEmpty {
                     ContentUnavailableView(
                         "API 키가 필요합니다",
-                        systemImage: "key",
+                        systemImage: "key.fill",
                         description: Text("오른쪽 위 톱니바퀴에서 서버 주소와 API 키를 입력하세요.")
                     )
                 } else if let errorMessage {
@@ -28,18 +42,8 @@ struct NoticeListView: View {
                         systemImage: "wifi.exclamationmark",
                         description: Text(errorMessage + "\n\niPhone에서 Tailscale이 켜져 있는지 확인하세요.")
                     )
-                } else if visibleNotices.isEmpty && !isLoading {
-                    ContentUnavailableView(
-                        showPostedToo ? "공지가 없습니다" : "업로드할 새 공지가 없습니다",
-                        systemImage: "checkmark.circle"
-                    )
                 } else {
-                    List(visibleNotices) { notice in
-                        NavigationLink(value: notice) {
-                            NoticeRow(notice: notice)
-                        }
-                    }
-                    .listStyle(.plain)
+                    listContent
                 }
             }
             .navigationTitle("CNU Info")
@@ -51,10 +55,16 @@ struct NoticeListView: View {
                 }
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Toggle("완료 포함", isOn: $showPostedToo)
-                        .toggleStyle(.button)
-                        .font(.caption)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Toggle(isOn: $showPostedToo) {
+                            Label("완료된 공지 표시", systemImage: "checkmark.circle")
+                        }
+                    } label: {
+                        Image(systemName: showPostedToo
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle")
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -79,6 +89,51 @@ struct NoticeListView: View {
         }
     }
 
+    @ViewBuilder
+    private var listContent: some View {
+        VStack(spacing: 0) {
+            boardChips
+            if visibleNotices.isEmpty && !isLoading {
+                ContentUnavailableView(
+                    showPostedToo ? "공지가 없습니다" : "업로드할 새 공지가 없습니다",
+                    systemImage: "checkmark.circle"
+                )
+            } else {
+                List(visibleNotices) { notice in
+                    NavigationLink(value: notice) {
+                        NoticeRow(notice: notice)
+                    }
+                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 12))
+                }
+                .listStyle(.insetGrouped)
+                .animation(.snappy, value: selectedBoard)
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    private var boardChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                BoardChip(title: "전체", isSelected: selectedBoard == nil) {
+                    selectedBoard = nil
+                }
+                ForEach(boards, id: \.id) { board in
+                    BoardChip(
+                        title: board.name,
+                        tint: BoardStyle.color(for: board.id),
+                        isSelected: selectedBoard == board.id
+                    ) {
+                        selectedBoard = selectedBoard == board.id ? nil : board.id
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
     private func load() async {
         guard !AppSettings.apiKey.isEmpty else { return }
         isLoading = true
@@ -92,36 +147,106 @@ struct NoticeListView: View {
     }
 }
 
+enum BoardStyle {
+    static func color(for boardId: String) -> Color {
+        switch boardId {
+        case "general": return .blue
+        case "academics": return .indigo
+        case "education": return .teal
+        case "startup": return .orange
+        case "recruitment": return .purple
+        case "scholarship": return .green
+        default: return .gray
+        }
+    }
+
+    static func symbol(for boardId: String) -> String {
+        switch boardId {
+        case "general": return "megaphone.fill"
+        case "academics": return "graduationcap.fill"
+        case "education": return "book.fill"
+        case "startup": return "lightbulb.fill"
+        case "recruitment": return "briefcase.fill"
+        case "scholarship": return "wonsign.circle.fill"
+        default: return "doc.text.fill"
+        }
+    }
+}
+
+private struct BoardChip: View {
+    let title: String
+    var tint: Color = .accentColor
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(isSelected ? tint : Color(.secondarySystemGroupedBackground))
+                .foregroundStyle(isSelected ? .white : .primary)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule().strokeBorder(Color(.separator).opacity(isSelected ? 0 : 0.5), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .animation(.snappy(duration: 0.2), value: isSelected)
+    }
+}
+
 private struct NoticeRow: View {
     let notice: NoticeSummary
 
+    private var displayDate: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        guard let date = formatter.date(from: notice.date) else {
+            return String(notice.date.prefix(10))
+        }
+        if Calendar.current.isDateInToday(date) {
+            return "오늘 " + date.formatted(date: .omitted, time: .shortened)
+        }
+        if Calendar.current.isDateInYesterday(date) {
+            return "어제"
+        }
+        return date.formatted(.dateTime.month(.defaultDigits).day())
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(notice.boardName)
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(Capsule())
-                if notice.posted {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+        HStack(spacing: 12) {
+            Image(systemName: BoardStyle.symbol(for: notice.boardId))
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(BoardStyle.color(for: notice.boardId).gradient)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(notice.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(2)
+                HStack(spacing: 4) {
+                    Text(displayDate)
+                    Text("·")
+                    Image(systemName: "photo.on.rectangle")
+                        .font(.caption2)
+                    Text("\(notice.imageCount)")
+                    if notice.posted {
+                        Text("·")
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                        Text("완료")
+                            .foregroundStyle(.green)
+                    }
                 }
-                Spacer()
-                Text("🖼 \(notice.imageCount)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Text(notice.title)
-                .font(.subheadline)
-                .lineLimit(2)
-            Text(notice.date)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
         }
-        .padding(.vertical, 2)
-        .opacity(notice.posted ? 0.5 : 1)
+        .opacity(notice.posted ? 0.55 : 1)
     }
 }
