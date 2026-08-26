@@ -9,7 +9,7 @@ User=moon
 Group=moon
 WorkingDirectory=/srv/cnuinfo
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/srv/cnuinfo/.venv/bin/python /srv/cnuinfo/scripts/monitor_new_notices.py --interval 60 --attachments-dir /srv/cnuinfo/attachments --data-dir /srv/cnuinfo/data --max-images 20 --workers 4
+ExecStart=/srv/cnuinfo/.venv/bin/python /srv/cnuinfo/scripts/monitor_new_notices.py --interval 30 --attachments-dir /srv/cnuinfo/attachments --data-dir /srv/cnuinfo/data --max-images 20 --workers 4
 Restart=always
 RestartSec=15
 

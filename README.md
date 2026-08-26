@@ -69,10 +69,19 @@ rm -rf attachments  # 첨부/이미지 전체 초기화 (선택)
 python scripts/monitor_new_notices.py --interval 30
 ```
 
-- `--interval`은 분 단위 주기(기본 60).
+- `--interval`은 분 단위 주기(기본 30).
 - `--max-images`로 공지별 생성 이미지 최대 수 조절(기본 20).
 - `--workers`로 신규 공지를 동시에 처리할 작업 수를 조절합니다(기본 4). 크롤링, 첨부 변환, 결과 이미지 생성은 병렬 처리되고 JSON 저장은 순차 처리됩니다.
 - `--boards-config`에 JSON 파일을 지정하면 `DEFAULT_BOARDS` 대신 사용자 정의 게시판 목록을 사용할 수 있습니다.
+
+### 텔레그램 신규 공지 알림
+
+서버의 Git에 포함되지 않는 `.env`에 아래 두 항목을 설정하면, 새로 크롤링을 마친 공지만 텔레그램으로 전송합니다. 기존 공지나 텔레그램 전송 실패로 인한 재시도 알림은 보내지 않습니다.
+
+```env
+TELEGRAM_BOT_TOKEN=봇_API_토큰
+TELEGRAM_CHAT_ID=받을_개인_또는_그룹_대화방_ID
+```
 
 스크립트가 실행되면 `data/notice_links.json`과 `data/notices_db.json`, 그리고 `attachments/<board_id>/<notice_id>/...` 구조가 자동 생성됩니다.
 

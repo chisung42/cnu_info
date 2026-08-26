@@ -19,6 +19,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests
+from dotenv import load_dotenv
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_PATH = SCRIPT_DIR.parent
 BASE_DIR = str(BASE_PATH)
@@ -27,6 +30,9 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 if str(BASE_PATH) not in sys.path:
     sys.path.insert(0, str(BASE_PATH))
+
+# The server's ignored .env file keeps notification credentials out of Git.
+load_dotenv(BASE_PATH / ".env")
 
 
 def _to_abs(path: str | None) -> str:
@@ -219,6 +225,50 @@ def _store_detail(record: dict, details_db: dict[str, dict], key: str) -> None:
     details_db[key] = record_copy
 
 
+def _telegram_message(detail: dict, board_name: str) -> str:
+    """Build a compact, plain-text message accepted by Telegram sendMessage."""
+    title = str(detail.get("title") or "제목 없는 공지").strip()
+    url = str(detail.get("url") or "").strip()
+    posted_at = str(detail.get("date") or detail.get("posted_at") or "").strip()
+    attachments = detail.get("attachments") or detail.get("downloaded_files") or []
+
+    lines = ["🔔 새로운 CNU 공지", f"[{board_name}]", title]
+    if posted_at:
+        lines.append(f"게시일: {posted_at}")
+    if attachments:
+        lines.append(f"첨부파일: {len(attachments)}개")
+    if url:
+        lines.extend(["", url])
+    # Telegram sendMessage allows a maximum of 4096 UTF-8 characters.
+    return "\n".join(lines)[:4096]
+
+
+def _send_telegram_notice(detail: dict, board_name: str) -> tuple[bool, str]:
+    """Send one newly crawled notice; disabled config never blocks crawling."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return False, "텔레그램 설정 없음"
+
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": _telegram_message(detail, board_name),
+                "disable_web_page_preview": False,
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            return False, str(payload.get("description") or "Telegram API 응답 오류")
+        return True, "전송 완료"
+    except (requests.RequestException, ValueError) as exc:
+        return False, str(exc)
+
+
 def monitor(
     interval_minutes: int,
     *,
@@ -406,6 +456,13 @@ def monitor(
                     _write_json(LINKS_FILE, links_db)
 
                     print(f"[처리 완료] {board_name} - {detail.get('title')}")
+                    sent, telegram_result = _send_telegram_notice(detail, board_name)
+                    if sent:
+                        print(f"[텔레그램] 전송 완료: {key}")
+                    elif telegram_result != "텔레그램 설정 없음":
+                        # Notification errors must not make the notice pending
+                        # again, otherwise a temporary Telegram outage can spam.
+                        print(f"[텔레그램 경고] 전송 실패 ({key}): {telegram_result}")
 
     try:
         while not should_quit.is_set():
@@ -441,8 +498,8 @@ def main() -> None:
     parser.add_argument(
         "--interval",
         type=int,
-        default=60,
-        help="크롤링 주기 (분 단위, 기본값: 60분)",
+        default=30,
+        help="크롤링 주기 (분 단위, 기본값: 30분)",
     )
     parser.add_argument(
         "--attachments-dir",
