@@ -12,6 +12,8 @@ import json
 import os
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -69,6 +71,18 @@ DETAILS_PATH = DATA_PATH / "notices_db.json"
 DATA_DIR = str(DATA_PATH)
 LINKS_FILE = str(LINKS_PATH)
 DETAILS_FILE = str(DETAILS_PATH)
+
+
+def _set_data_dir(data_dir: str | None) -> None:
+    global DATA_PATH, LINKS_PATH, DETAILS_PATH, DATA_DIR, LINKS_FILE, DETAILS_FILE
+    if not data_dir:
+        return
+    DATA_PATH = Path(_to_abs(data_dir)).resolve()
+    LINKS_PATH = DATA_PATH / "notice_links.json"
+    DETAILS_PATH = DATA_PATH / "notices_db.json"
+    DATA_DIR = str(DATA_PATH)
+    LINKS_FILE = str(LINKS_PATH)
+    DETAILS_FILE = str(DETAILS_PATH)
 
 def _ensure_data_dir() -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -132,6 +146,7 @@ def _load_board_config(path: str | None, attachments_base: str) -> list[dict[str
         fallback_url = DEFAULT_BOARDS[0]["url"] if DEFAULT_BOARDS else ""
         url = board.get("url") or fallback_url
         max_articles = int(board.get("max_articles") or MAX_ARTICLES)
+        parser_name = str(board.get("parser") or "").strip().lower()
         attachments_dir_value = board.get("attachments_dir")
         if attachments_dir_value:
             attachments_dir_path = Path(_to_abs(attachments_dir_value))
@@ -145,6 +160,7 @@ def _load_board_config(path: str | None, attachments_base: str) -> list[dict[str
                 "url": url,
                 "max_articles": max_articles,
                 "attachments_dir": _to_rel(str(attachments_dir_path)),
+                "parser": parser_name,
             }
         )
     return normalized
@@ -209,10 +225,16 @@ def monitor(
     download_attachments: bool = True,
     max_images: int = 20,
     boards_config: str | None = None,
+    data_dir: str | None = None,
+    workers: int = 4,
 ) -> None:
+    _set_data_dir(data_dir)
     print(
-        f"[모니터링 시작] 주기: {interval_minutes}분, 첨부 다운로드: {download_attachments}"
+        f"[모니터링 시작] 주기: {interval_minutes}분, 첨부 다운로드: {download_attachments}, 병렬 작업: {workers}"
     )
+    print(f"[데이터 경로] {DATA_DIR}")
+    print("[명령어] 'r' 또는 'refresh' 입력 시 즉시 새로고침, 'q' 또는 'quit' 입력 시 종료")
+    print("-" * 60)
 
     boards = _load_board_config(boards_config, attachments_base)
     board_map = {board["id"]: board for board in boards}
@@ -220,80 +242,149 @@ def monitor(
     links_db = _load_json_dict(LINKS_FILE)
     details_db = _load_json_dict(DETAILS_FILE)
 
-    try:
-        while True:
-            cycle_start = time.time()
+    # 새로고침 요청 플래그
+    refresh_requested = threading.Event()
+    should_quit = threading.Event()
 
-            for board in boards:
-                board_id = board["id"]
-                board_name = board["name"]
-                board_url = board["url"]
-                attachments_dir_rel = board["attachments_dir"]
-                attachments_dir_abs = _to_abs(attachments_dir_rel)
-                os.makedirs(attachments_dir_abs, exist_ok=True)
+    def input_listener():
+        """사용자 입력을 받는 스레드"""
+        while not should_quit.is_set():
+            try:
+                user_input = input().strip().lower()
+                if user_input in ('r', 'refresh'):
+                    print("\n[사용자 요청] 즉시 새로고침을 시작합니다...")
+                    refresh_requested.set()
+                elif user_input in ('q', 'quit'):
+                    print("\n[사용자 요청] 모니터링을 종료합니다...")
+                    should_quit.set()
+                    break
+                elif user_input in ('h', 'help', '?'):
+                    print("\n[명령어 도움말]")
+                    print("  r, refresh : 즉시 새로고침")
+                    print("  q, quit    : 모니터링 종료")
+                    print("  h, help, ? : 도움말 표시")
+                    print()
+            except EOFError:
+                break
+            except Exception:
+                pass
 
-                session_links = list_notice_links(
-                    board_url,
-                    max_articles=board.get("max_articles", MAX_ARTICLES),
+    # 입력 리스너 스레드 시작
+    listener_thread = threading.Thread(target=input_listener, daemon=True)
+    listener_thread.start()
+
+    def process_notice(key: str, link_info: dict, board: dict) -> tuple[str, dict | None, str | None]:
+        board_id = board["id"]
+        board_name = board["name"]
+        board_url = board["url"]
+        attachments_dir_rel = board["attachments_dir"]
+        notice_id = link_info.get("notice_id") or link_info.get("id")
+
+        detail = crawl_notice_detail(
+            link_info.get("url"),
+            notice_id=notice_id,
+            download_attachments=download_attachments,
+            attachments_dir=_to_abs(
+                link_info.get("attachments_dir") or attachments_dir_rel
+            ),
+            title_hint=link_info.get("title"),
+            board_id=board_id,
+            board_name=board_name,
+            board_url=board_url,
+            parser=board.get("parser"),
+        )
+        if not detail:
+            return key, None, "상세 크롤링 실패"
+
+        if download_attachments and detail.get("attachment_dir"):
+            try:
+                result = generate_notice_images(
+                    detail,
+                    _to_abs(detail["attachment_dir"]),
+                    max_images=max_images,
                 )
-                for entry in session_links:
-                    entry["board_id"] = board_id
-                    entry["board_name"] = board_name
-                    entry["board_url"] = board_url
-                    entry["attachments_dir"] = attachments_dir_rel
+                detail["image_result"] = result
+            except Exception as exc:
+                return key, detail, f"이미지 생성 실패: {exc}"
 
-                _update_links(session_links, links_db)
-                _write_json(LINKS_FILE, links_db)
+        return key, detail, None
 
-                pending_keys = [
-                    key
-                    for key, info in links_db.items()
-                    if not info.get("crawled")
-                    and (info.get("board_id") or "default") == board_id
-                ]
+    def run_crawl_cycle():
+        """한 번의 크롤링 사이클 실행"""
+        nonlocal links_db, details_db
 
-                if not pending_keys:
-                    print(
-                        f"[{board_name}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 신규 링크 없음"
-                    )
-                    continue
+        for board in boards:
+            board_id = board["id"]
+            board_name = board["name"]
+            board_url = board["url"]
+            attachments_dir_rel = board["attachments_dir"]
+            attachments_dir_abs = _to_abs(attachments_dir_rel)
+            os.makedirs(attachments_dir_abs, exist_ok=True)
 
-                print(f"[{board_name}] 새 링크 {len(pending_keys)}건 처리 중...")
+            session_links = list_notice_links(
+                board_url,
+                max_articles=board.get("max_articles", MAX_ARTICLES),
+                parser=board.get("parser"),
+            )
+            for entry in session_links:
+                entry["board_id"] = board_id
+                entry["board_name"] = board_name
+                entry["board_url"] = board_url
+                entry["attachments_dir"] = attachments_dir_rel
 
+            _update_links(session_links, links_db)
+            _write_json(LINKS_FILE, links_db)
+
+            pending_keys = [
+                key
+                for key, info in links_db.items()
+                if not info.get("crawled")
+                and not info.get("hidden")
+                and (info.get("board_id") or "default") == board_id
+            ]
+
+            if not pending_keys:
+                print(
+                    f"[{board_name}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - 신규 링크 없음"
+                )
+                continue
+
+            active_workers = max(1, min(workers, len(pending_keys)))
+            print(f"[{board_name}] 새 링크 {len(pending_keys)}건 처리 중... (workers={active_workers})")
+
+            with ThreadPoolExecutor(max_workers=active_workers) as executor:
+                futures = {}
                 for key in pending_keys:
-                    link_info = links_db.get(key) or {}
-                    notice_id = link_info.get("notice_id") or link_info.get("id")
+                    link_info = dict(links_db.get(key) or {})
+                    futures[
+                        executor.submit(process_notice, key, link_info, dict(board))
+                    ] = (key, link_info)
 
-                    detail = crawl_notice_detail(
-                        link_info.get("url"),
-                        notice_id=notice_id,
-                        download_attachments=download_attachments,
-                        attachments_dir=_to_abs(
-                            link_info.get("attachments_dir") or attachments_dir_rel
-                        ),
-                        title_hint=link_info.get("title"),
-                        board_id=board_id,
-                        board_name=board_name,
-                        board_url=board_url,
-                    )
-                    if not detail:
-                        print(f"[경고] 상세 크롤링 실패: {key}")
+                for future in as_completed(futures):
+                    key, link_info = futures[future]
+                    try:
+                        _, detail, error = future.result()
+                    except Exception as exc:
+                        print(f"[에러] 처리 실패 ({key}): {exc}")
                         continue
 
-                    if download_attachments and detail.get("attachment_dir"):
-                        try:
-                            result = generate_notice_images(
-                                detail,
-                                _to_abs(detail["attachment_dir"]),
-                                max_images=max_images,
-                            )
-                            detail["image_result"] = result
-                        except Exception as exc:
-                            print(f"[에러] 이미지 생성 실패 ({key}): {exc}")
+                    if error:
+                        print(f"[경고] {error}: {key}")
+                    if not detail:
+                        continue
 
+                    # 디스크의 최신 내용을 다시 읽어 이 항목만 갱신한다.
+                    # (시작 시점 메모리 사본을 그대로 덮어쓰면 웹 대시보드의
+                    #  이미지 순서변경/삭제/썸네일 편집이 되돌려진다.)
+                    details_db = _load_json_dict(DETAILS_FILE)
+                    links_db = _load_json_dict(LINKS_FILE)
+                    if (links_db.get(key) or {}).get("hidden"):
+                        print(f"[건너뜀] 대시보드에서 삭제된 공지: {key}")
+                        continue
                     _store_detail(detail, details_db, key)
                     _write_json(DETAILS_FILE, details_db)
 
+                    links_db.setdefault(key, {})
                     links_db[key]["crawled"] = True
                     links_db[key]["crawled_at"] = detail.get("crawled_at")
                     if detail.get("attachment_dir"):
@@ -303,11 +394,33 @@ def monitor(
 
                     print(f"[처리 완료] {board_name} - {detail.get('title')}")
 
+    try:
+        while not should_quit.is_set():
+            cycle_start = time.time()
+
+            # 크롤링 사이클 실행
+            run_crawl_cycle()
+
+            # 새로고침 플래그 초기화
+            refresh_requested.clear()
+
             elapsed = time.time() - cycle_start
             sleep_seconds = max(5, interval_minutes * 60 - int(elapsed))
-            time.sleep(sleep_seconds)
+
+            print(f"\n[대기 중] 다음 크롤링까지 {sleep_seconds}초 대기... (명령어 입력 가능)")
+
+            # 대기 시간 동안 새로고침 요청 확인
+            for _ in range(sleep_seconds):
+                if should_quit.is_set():
+                    break
+                if refresh_requested.is_set():
+                    print("\n[즉시 새로고침] 크롤링을 시작합니다...")
+                    break
+                time.sleep(1)
+
     except KeyboardInterrupt:
         print("\n사용자 중단으로 모니터링을 종료합니다.")
+        should_quit.set()
 
 
 def main() -> None:
@@ -328,10 +441,21 @@ def main() -> None:
         help="모니터링할 게시판 설정 JSON 파일 경로",
     )
     parser.add_argument(
+        "--data-dir",
+        default="data",
+        help="notice_links.json / notices_db.json 저장 경로 (기본: data)",
+    )
+    parser.add_argument(
         "--max-images",
         type=int,
         default=20,
         help="공지당 생성할 최대 이미지 수 (기본값: 20)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="동시에 처리할 신규 공지 수 (기본값: 4)",
     )
     args = parser.parse_args()
 
@@ -341,9 +465,10 @@ def main() -> None:
         download_attachments=True,
         max_images=max(3, args.max_images),
         boards_config=args.boards_config,
+        data_dir=args.data_dir,
+        workers=max(1, args.workers),
     )
 
 
 if __name__ == "__main__":
     main()
-

@@ -4,15 +4,15 @@
 
 ## 주요 기능
 
-- **다중 게시판 모니터링**  
-  - `scripts/crawl_notices.py`의 `DEFAULT_BOARDS` 리스트에서 게시판 ID, 이름, URL, 수집 개수를 정의합니다.  
+- **다중 게시판 모니터링**
+  - `scripts/crawl_notices.py`의 `DEFAULT_BOARDS` 리스트에서 게시판 ID, 이름, URL, 수집 개수를 정의합니다.
   - 기본적으로 학사정보(`academics`), 교육정보(`education`) 게시판을 모니터링합니다.
-- **자동 수집 파이프라인**  
-  - `scripts/monitor_new_notices.py`가 주기적으로 게시판을 확인합니다.  
-  - 새 공지가 발견되면 첨부파일을 다운로드하고, PDF/HWP 변환 및 이미지 생성(`generate_notice_images.py`)까지 실행합니다.  
+- **자동 수집 파이프라인**
+  - `scripts/monitor_new_notices.py`가 주기적으로 게시판을 확인합니다.
+  - 새 공지가 발견되면 첨부파일을 다운로드하고, HWP/HWPX→PDF 변환, PDF→이미지 변환, Instagram 이미지 생성(`generate_instagram_images.py`)까지 실행합니다.
   - 결과는 `data/notice_links.json`, `data/notices_db.json`에 저장되며, 경로는 모두 프로젝트 기준 상대경로입니다.
-- **웹 대시보드**  
-  - `scripts/web_dashboard.py`가 Flask 기반으로 대시보드를 제공합니다.  
+- **웹 대시보드**
+  - `scripts/web_dashboard.py`가 Flask 기반으로 대시보드를 제공합니다.
   - 게시판별 탭과 페이지(기본 5건씩)로 정돈된 카드 뷰, 제목/본문 복사 버튼, 이미지 미리보기, ZIP 다운로드 링크를 제공합니다.
 
 ## 폴더 구조
@@ -38,6 +38,19 @@ source .venv/bin/activate  # Windows는 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### HWP/HWPX 자동 변환 준비
+
+HWP/HWPX 변환은 기본적으로 오픈소스 `rhwp` CLI를 사용합니다. `rhwp`가 설치되어 있으면 크롤러와 웹 대시보드 업로드가 `.hwp`, `.hwpx` 파일을 자동으로 PDF로 변환한 뒤 결과 JPG 이미지를 생성합니다.
+
+```bash
+git clone https://github.com/edwardkim/rhwp.git
+cd rhwp
+cargo build --release
+export RHWP_CLI="$PWD/target/release/rhwp"
+```
+
+`rhwp`가 `PATH`에 있으면 `RHWP_CLI` 설정은 생략할 수 있습니다. HWP/HWPX 변환은 `rhwp`만 사용합니다.
+
 ## 사용 방법
 
 ### 1. (선택) 이전 데이터 초기화
@@ -56,8 +69,9 @@ rm -rf attachments  # 첨부/이미지 전체 초기화 (선택)
 python scripts/monitor_new_notices.py --interval 30
 ```
 
-- `--interval`은 분 단위 주기(기본 60).  
-- `--max-images`로 공지별 생성 이미지 최대 수 조절(기본 20).  
+- `--interval`은 분 단위 주기(기본 60).
+- `--max-images`로 공지별 생성 이미지 최대 수 조절(기본 20).
+- `--workers`로 신규 공지를 동시에 처리할 작업 수를 조절합니다(기본 4). 크롤링, 첨부 변환, 결과 이미지 생성은 병렬 처리되고 JSON 저장은 순차 처리됩니다.
 - `--boards-config`에 JSON 파일을 지정하면 `DEFAULT_BOARDS` 대신 사용자 정의 게시판 목록을 사용할 수 있습니다.
 
 스크립트가 실행되면 `data/notice_links.json`과 `data/notices_db.json`, 그리고 `attachments/<board_id>/<notice_id>/...` 구조가 자동 생성됩니다.
@@ -68,14 +82,14 @@ python scripts/monitor_new_notices.py --interval 30
 python scripts/web_dashboard.py --host 127.0.0.1 --port 8000
 ```
 
-- 브라우저에서 `http://127.0.0.1:8000` 접속 → 게시판별 탭과 페이지별 카드 목록 확인.  
-- 각 공지 카드에서 제목/본문 복사, 이미지 미리보기, ZIP 다운로드(이미지 전체) 기능을 사용할 수 있습니다.
+- 브라우저에서 `http://127.0.0.1:8000` 접속 → 게시판별 탭과 페이지별 카드 목록 확인.
+- 각 공지 카드에서 제목/본문 복사, 이미지 미리보기, ZIP 다운로드(이미지 전체), PDF/HWP/HWPX 업로드 후 자동 이미지 재생성 기능을 사용할 수 있습니다.
 
 ### 4. 개별 유틸리티
 
-- **단일 크롤링**: `python scripts/crawl_notices.py`  
-  - 새 JSON을 만들거나 구조를 점검할 때 사용.  
-- **개별 이미지 재생성**: `python scripts/generate_instagram_images.py --notice-id <ID>`  
+- **단일 크롤링**: `python scripts/crawl_notices.py`
+  - 새 JSON을 만들거나 구조를 점검할 때 사용.
+- **개별 이미지 재생성**: `python scripts/generate_instagram_images.py --notice-id <ID>`
   - 기존 데이터를 기반으로 특정 공지의 이미지만 다시 만들고 싶을 때.
 
 ## 설정 변경

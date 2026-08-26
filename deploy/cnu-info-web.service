@@ -1,0 +1,16 @@
+[Unit]
+Description=CNU Info web dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=moon
+Group=moon
+WorkingDirectory=/srv/cnuinfo/scripts
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/srv/cnuinfo/.venv/bin/gunicorn --workers 2 --threads 4 --worker-class gthread --bind 127.0.0.1:8003 --timeout 300 --access-logfile - --error-logfile - web_dashboard:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -42,6 +42,7 @@ def _to_rel(path: str | None) -> str:
 
 SUPPORTED_SOURCE_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 _PAGE_NUMBER_SUFFIX_PATTERN = re.compile(r"(?:[_-])(?P<digits>\d{2,4})$")
+LOGO_PATH = BASE_PATH / "assets" / "cnu_logo_white.png"
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -78,6 +79,23 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, m
 
 def _save_jpeg(image: Image.Image, path: str) -> None:
     image.save(path, format="JPEG", quality=95)
+
+
+def _draw_thumbnail_brand(image: Image.Image) -> None:
+    if not LOGO_PATH.exists():
+        return
+    try:
+        with Image.open(LOGO_PATH) as logo:
+            logo = logo.convert("RGBA")
+            logo.thumbnail((1140, 1140))
+            alpha = logo.getchannel("A")
+            alpha = alpha.point(lambda value: int(value * 0.18))
+            logo.putalpha(alpha)
+            x = (image.width - logo.width) // 2
+            y = (image.height - logo.height) // 2 - 40
+            image.paste(logo, (x, y), logo)
+    except Exception:
+        return
 
 
 def _collect_images_from_dir(directory: str) -> list[str]:
@@ -179,6 +197,64 @@ def _normalize_date_text(raw: str | None) -> str:
     return value
 
 
+def generate_notice_thumbnail_header(
+    notice: dict,
+    attachment_root: str,
+    *,
+    title: str | None = None,
+    date_text: str | None = None,
+    out_filename: str = "01.jpg",
+) -> str:
+    """
+    썸네일(첫 이미지)용 헤더 이미지만 재생성.
+    - 결과 파일은 {attachment_root}/result/{out_filename} 로 저장됨
+    - 반환값은 상대경로(_to_rel) 문자열
+    """
+    final_title = (title if isinstance(title, str) and title.strip() else (notice.get("title") or "제목 없음")).strip()
+    final_date = (
+        _normalize_date_text(date_text)
+        if isinstance(date_text, str) and date_text.strip()
+        else _normalize_date_text(notice.get("date"))
+    )
+
+    img_width, img_height = 1080, 1350
+    header_font = _load_font(90)
+    date_font = _load_font(60)
+
+    attachment_root_abs = _to_abs(attachment_root)
+    attachment_path = Path(attachment_root_abs)
+    result_dir_path = attachment_path / "result"
+    result_dir_path.mkdir(parents=True, exist_ok=True)
+
+    header_img = Image.new("RGB", (img_width, img_height), "white")
+    _draw_thumbnail_brand(header_img)
+    header_draw = ImageDraw.Draw(header_img)
+    max_text_width = img_width - 200
+    title_lines = wrap_text(header_draw, final_title, header_font, max_text_width)
+    line_height = 100
+    date_line_height = 80
+    title_to_date_gap = 20
+    total_text_height = len(title_lines) * line_height + title_to_date_gap + date_line_height
+    start_y = (img_height - total_text_height) // 2
+
+    for i, line in enumerate(title_lines):
+        bbox = header_draw.textbbox((0, 0), line, font=header_font)
+        text_width = bbox[2] - bbox[0]
+        x = (img_width - text_width) // 2
+        y = start_y + i * line_height
+        header_draw.text((x, y), line, fill="black", font=header_font)
+
+    date_bbox = header_draw.textbbox((0, 0), final_date, font=date_font)
+    date_width = date_bbox[2] - date_bbox[0]
+    date_x = (img_width - date_width) // 2
+    date_y = start_y + len(title_lines) * line_height + title_to_date_gap
+    header_draw.text((date_x, date_y), final_date, fill="black", font=date_font)
+
+    header_path = result_dir_path / out_filename
+    _save_jpeg(header_img, str(header_path))
+    return _to_rel(str(header_path))
+
+
 def generate_notice_images(
     notice: dict,
     attachment_root: str,
@@ -226,6 +302,9 @@ def generate_notice_images(
 
     # 01: 제목 + 날짜
     header_img = Image.new("RGB", (img_width, img_height), "white")
+    # 신규 공지, 재크롤링, 파일 업로드로 생성되는 모든 썸네일에 CNU 브랜딩을
+    # 기본 적용한다. 대시보드에서 별도로 "썸네일 적용"을 누를 필요가 없다.
+    _draw_thumbnail_brand(header_img)
     header_draw = ImageDraw.Draw(header_img)
     max_text_width = img_width - 200
     title_lines = wrap_text(header_draw, title, header_font, max_text_width)
@@ -403,4 +482,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

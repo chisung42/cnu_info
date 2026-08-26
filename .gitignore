@@ -1,0 +1,24 @@
+.venv/
+.env
+
+# Runtime state belongs to the production server, not Git.
+data/
+attachments/
+backups/
+
+# Local-only files
+.DS_Store
+__pycache__/
+*.py[cod]
+*.log
+/dashboard_8001.log
+/monitor.log
+/1.hwp
+/1.pdf
+/test.
+/test2.
+/cnu_info_codex/
+/node_modules/
+/package.json
+/package-lock.json
+/proxy.js
