@@ -23,6 +23,12 @@ ssh -p "$REMOTE_PORT" "$REMOTE_HOST" "
   git fetch origin main
   git reset --hard origin/main
   .venv/bin/pip install -r requirements.txt
+  sudo install -m 644 deploy/cnu-info-web.service /etc/systemd/system/cnu-info-web.service
+  sudo install -m 644 deploy/cnu-info-monitor.service /etc/systemd/system/cnu-info-monitor.service
+  sudo systemctl daemon-reload
+  sudo install -m 644 deploy/cnu-info.nginx /etc/nginx/sites-available/cnu-info
+  sudo nginx -t
+  sudo systemctl reload nginx
   sudo systemctl restart cnu-info-web cnu-info-monitor
   curl -fsS -o /dev/null http://127.0.0.1:8003/
 "
