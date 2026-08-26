@@ -73,6 +73,14 @@ try:
 except ImportError as exc:
     raise SystemExit(f"이미지 생성 모듈 로드 실패: {exc}") from exc
 
+try:
+    from scripts.notice_display import make_display_content
+except ImportError as exc:
+    try:
+        from notice_display import make_display_content
+    except ImportError:
+        raise SystemExit(f"공지 본문 표시 모듈 로드 실패: {exc}") from exc
+
 
 DATA_PATH = BASE_PATH / "data"
 LINKS_PATH = DATA_PATH / "notice_links.json"
@@ -302,11 +310,12 @@ def _split_telegram_text(text: str, limit: int = 4096) -> list[str]:
 
 
 def _send_telegram_notice_body(detail: dict) -> tuple[bool, str]:
-    """Send only the crawled body text so it can be copied without cleanup."""
-    content = str(detail.get("content") or "").strip()
-    if not content:
-        return True, "전송할 본문 없음"
-    chunks = _split_telegram_text(content)
+    """Send the same upload text produced by the dashboard's '본문 복사'."""
+    body = make_display_content(
+        str(detail.get("board_id") or "default"),
+        str(detail.get("content") or ""),
+    )
+    chunks = _split_telegram_text(body)
     for chunk in chunks:
         sent, result = _send_telegram_text(
             chunk,
@@ -314,7 +323,7 @@ def _send_telegram_notice_body(detail: dict) -> tuple[bool, str]:
         )
         if not sent:
             return False, result
-    return True, f"본문 {len(chunks)}개 메시지 전송 완료"
+    return True, f"업로드용 본문 {len(chunks)}개 메시지 전송 완료"
 
 
 def _telegram_generated_images(detail: dict) -> list[Path]:

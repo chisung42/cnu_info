@@ -34,6 +34,11 @@ from flask import (
 from PIL import Image
 from werkzeug.serving import WSGIRequestHandler
 
+try:
+    from scripts.notice_display import make_display_content
+except ImportError:
+    from notice_display import make_display_content
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_PATH = SCRIPT_DIR.parent
 BASE_DIR = str(BASE_PATH)
@@ -1115,19 +1120,6 @@ NOTICE_CARDS_TEMPLATE = """
 """
 
 
-def get_board_header(board_id: str) -> str:
-    """게시판별 헤더 텍스트 반환"""
-    board_headers = {
-        "general": "[충남대학교 일반소식]",
-        "academics": "[충남대학교 학사정보]",
-        "education": "[충남대학교 교육정보]",
-        "startup": "[충남대학교 사업단 창업ㆍ교육]",
-        "recruitment": "[충남대학교 채용/초빙]",
-        "scholarship": "[충남대학교 장학정보]",
-    }
-    return board_headers.get(board_id, f"[{board_id}]")
-
-
 def _prepare_notice_for_view(notice: dict) -> dict:
     notice = dict(notice)
     generated = notice.get("image_result", {}).get("generated_images") or []
@@ -1164,12 +1156,8 @@ def _prepare_notice_for_view(notice: dict) -> dict:
     notice["thumb_date_value"] = thumb_date_override or (notice.get("date") or "")
 
     board_id = notice.get("board_id") or "default"
-    board_header = get_board_header(board_id)
     content = notice.get("content") or ""
-    if content:
-        notice["display_content"] = f"{board_header}\n{content}\n\n#충남대학교 #충남대 #충대 #cnu"
-    else:
-        notice["display_content"] = f"{board_header}\n\n#충남대학교 #충남대 #충대 #cnu"
+    notice["display_content"] = make_display_content(board_id, content)
     return notice
 
 
