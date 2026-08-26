@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
+import mimetypes
 import os
 import signal
 import sys
@@ -273,6 +275,79 @@ def _send_telegram_text(text: str) -> tuple[bool, str]:
             return False, str(payload.get("description") or "Telegram API 응답 오류")
         return True, "전송 완료"
     except (requests.RequestException, ValueError) as exc:
+        return False, str(exc)
+
+
+def _telegram_generated_images(detail: dict) -> list[Path]:
+    """Return generated notice images that still exist in this project."""
+    image_result = detail.get("image_result") or {}
+    candidates = image_result.get("generated_images") if isinstance(image_result, dict) else []
+    images: list[Path] = []
+    seen: set[Path] = set()
+    for raw_path in candidates or []:
+        path = Path(_to_abs(str(raw_path))).resolve()
+        if (
+            path in seen
+            or not path.is_file()
+            or path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}
+        ):
+            continue
+        seen.add(path)
+        images.append(path)
+    return images
+
+
+def _send_telegram_images(detail: dict) -> tuple[bool, str]:
+    """Send generated notice images as photo albums of up to 10 files."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    images = _telegram_generated_images(detail)
+    if not token or not chat_id:
+        return False, "텔레그램 설정 없음"
+    if not images:
+        return True, "전송할 생성 이미지 없음"
+
+    endpoint = f"https://api.telegram.org/bot{token}"
+    try:
+        for start in range(0, len(images), 10):
+            batch = images[start : start + 10]
+            if len(batch) == 1:
+                with batch[0].open("rb") as photo:
+                    response = requests.post(
+                        f"{endpoint}/sendPhoto",
+                        data={"chat_id": chat_id},
+                        files={
+                            "photo": (
+                                batch[0].name,
+                                photo,
+                                mimetypes.guess_type(batch[0].name)[0],
+                            )
+                        },
+                        timeout=60,
+                    )
+            else:
+                with ExitStack() as stack:
+                    files: dict[str, tuple[str, Any, str | None]] = {}
+                    media: list[dict[str, str]] = []
+                    for index, image_path in enumerate(batch):
+                        field = f"photo{index}"
+                        files[field] = (
+                            image_path.name,
+                            stack.enter_context(image_path.open("rb")),
+                            mimetypes.guess_type(image_path.name)[0],
+                        )
+                        media.append({"type": "photo", "media": f"attach://{field}"})
+                    response = requests.post(
+                        f"{endpoint}/sendMediaGroup",
+                        data={"chat_id": chat_id, "media": json.dumps(media)},
+                        files=files,
+                        timeout=90,
+                    )
+            response.raise_for_status()
+            if not response.json().get("ok"):
+                return False, "Telegram API 응답 오류"
+        return True, f"이미지 {len(images)}장 전송 완료"
+    except (OSError, requests.RequestException, ValueError) as exc:
         return False, str(exc)
 
 
@@ -549,6 +624,11 @@ def monitor(
                     sent, telegram_result = _send_telegram_notice(detail, board_name)
                     if sent:
                         print(f"[텔레그램] 전송 완료: {key}")
+                        images_sent, images_result = _send_telegram_images(detail)
+                        if images_sent:
+                            print(f"[텔레그램] {images_result}: {key}")
+                        else:
+                            print(f"[텔레그램 경고] 이미지 전송 실패 ({key}): {images_result}")
                     elif telegram_result != "텔레그램 설정 없음":
                         # Notification errors must not make the notice pending
                         # again, otherwise a temporary Telegram outage can spam.
