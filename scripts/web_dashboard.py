@@ -256,10 +256,23 @@ ADMIN_OPERATION_COMMANDS: dict[str, list[tuple[str, list[str]]]] = {
         ("디스크", ["df", "-h", BASE_DIR]),
     ],
     "logs": [
-        # -r returns the newest journal entries first, matching the dashboard's
-        # live-monitoring use case: new events stay visible at the top.
-        ("웹 대시보드 로그 (최신순)", ["journalctl", "-r", "-u", "cnu-info-web.service", "-n", "60", "--no-pager"]),
-        ("크롤러 로그 (최신순)", ["journalctl", "-r", "-u", "cnu-info-monitor.service", "-n", "60", "--no-pager"]),
+        # Keep both services in one journal query. Running two separate queries
+        # looked newest-first within each block, but not across the dashboard.
+        # -r makes the globally newest event the first displayed line.
+        (
+            "통합 최근 로그 (최신순)",
+            [
+                "journalctl",
+                "-r",
+                "-u",
+                "cnu-info-web.service",
+                "-u",
+                "cnu-info-monitor.service",
+                "-n",
+                "120",
+                "--no-pager",
+            ],
+        ),
     ],
     "refresh_crawler": [
         (
