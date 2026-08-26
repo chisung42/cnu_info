@@ -43,6 +43,18 @@ final class NoticeFlowUITests: XCTestCase {
         attach(name: "04-photo-viewer")
         closeButton.tap()
 
+        // 썸네일 수정 시트 열기/닫기 (서버 변경 없음)
+        let detailMenu = app.buttons["detail-menu"]
+        XCTAssertTrue(detailMenu.waitForExistence(timeout: 5), "상세 메뉴 버튼이 있어야 한다")
+        detailMenu.tap()
+        let thumbEdit = app.buttons["썸네일 제목 수정"]
+        XCTAssertTrue(thumbEdit.waitForExistence(timeout: 5), "상세 메뉴에 썸네일 수정이 있어야 한다")
+        thumbEdit.tap()
+        let applyButton = app.buttons["적용"]
+        XCTAssertTrue(applyButton.waitForExistence(timeout: 5), "썸네일 편집 시트가 열려야 한다")
+        attach(name: "05-thumbnail-editor")
+        app.buttons["취소"].tap()
+
         // 완료 표시 → 서버 POST → 완료 해제 원복
         let doneButton = app.buttons["완료 표시"]
         if doneButton.waitForExistence(timeout: 5) {

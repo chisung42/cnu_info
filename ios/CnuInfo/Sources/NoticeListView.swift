@@ -7,6 +7,8 @@ struct NoticeListView: View {
     @State private var showPostedToo = false
     @State private var showSettings = false
     @State private var selectedBoard: String?
+    @State private var isRefreshingCrawler = false
+    @State private var crawlerMessage: String?
 
     private let api = APIClient()
 
@@ -56,6 +58,19 @@ struct NoticeListView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await refreshCrawler() }
+                    } label: {
+                        if isRefreshingCrawler {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
+                    }
+                    .disabled(isRefreshingCrawler || AppSettings.apiKey.isEmpty)
+                    .accessibilityLabel("크롤러 새로고침")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Toggle(isOn: $showPostedToo) {
                             Label("완료된 공지 표시", systemImage: "checkmark.circle")
@@ -76,6 +91,14 @@ struct NoticeListView: View {
             }
             .refreshable { await load() }
             .task { await load() }
+            .alert("크롤러 새로고침", isPresented: Binding(
+                get: { crawlerMessage != nil },
+                set: { if !$0 { crawlerMessage = nil } }
+            )) {
+                Button("확인", role: .cancel) {}
+            } message: {
+                Text(crawlerMessage ?? "")
+            }
             .sheet(isPresented: $showSettings, onDismiss: {
                 Task { await load() }
             }) {
@@ -144,6 +167,17 @@ struct NoticeListView: View {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    private func refreshCrawler() async {
+        isRefreshingCrawler = true
+        defer { isRefreshingCrawler = false }
+        do {
+            try await api.refreshCrawler()
+            crawlerMessage = "크롤러에 수집 신호를 보냈습니다. 새 공지가 있으면 잠시 후 목록을 당겨 새로고침하세요."
+        } catch {
+            crawlerMessage = "신호 전송 실패: \(error.localizedDescription)"
+        }
     }
 }
 

@@ -12,6 +12,8 @@ struct NoticeDetailView: View {
     @State private var workStatus = ""
     @State private var showDoneConfirm = false
     @State private var viewerIndex: Int?
+    @State private var showThumbnailEditor = false
+    @State private var showRecrawlConfirm = false
 
     private let api = APIClient()
 
@@ -34,6 +36,43 @@ struct NoticeDetailView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(summary.boardName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        showThumbnailEditor = true
+                    } label: {
+                        Label("썸네일 제목 수정", systemImage: "character.cursor.ibeam")
+                    }
+                    Button {
+                        showRecrawlConfirm = true
+                    } label: {
+                        Label("재크롤링", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityIdentifier("detail-menu")
+                .disabled(detail == nil || isWorking)
+            }
+        }
+        .sheet(isPresented: $showThumbnailEditor) {
+            if let detail {
+                ThumbnailEditorSheet(
+                    title: detail.thumbTitle,
+                    date: detail.thumbDate
+                ) { newTitle, newDate in
+                    await applyThumbnail(title: newTitle, date: newDate)
+                }
+            }
+        }
+        .confirmationDialog("이 공지를 처음부터 다시 크롤링할까요?", isPresented: $showRecrawlConfirm, titleVisibility: .visible) {
+            Button("재크롤링", role: .destructive) {
+                Task { await recrawl() }
+            }
+        } message: {
+            Text("본문·첨부파일·이미지를 다시 수집합니다. 몇 분 걸릴 수 있습니다.")
+        }
         .task { await load() }
         .alert("인스타그램 업로드를 마쳤나요?", isPresented: $showDoneConfirm) {
             Button("완료로 표시") { Task { await markDone(true) } }
@@ -217,6 +256,32 @@ struct NoticeDetailView: View {
         }
     }
 
+    private func applyThumbnail(title: String, date: String) async {
+        isWorking = true
+        workStatus = "썸네일 재생성 중…"
+        defer { isWorking = false }
+        do {
+            try await api.updateThumbnail(key: summary.noticeKey, title: title, date: date)
+            previews = []
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func recrawl() async {
+        isWorking = true
+        workStatus = "재크롤링 중… (몇 분 걸릴 수 있어요)"
+        defer { isWorking = false }
+        do {
+            try await api.recrawlNotice(key: summary.noticeKey)
+            previews = []
+            await load()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func saveAndOpenInstagram(_ detail: NoticeDetail) async {
         isWorking = true
         defer { isWorking = false }
@@ -272,6 +337,51 @@ struct NoticeDetailView: View {
 
 extension Int: @retroactive Identifiable {
     public var id: Int { self }
+}
+
+// MARK: - 썸네일 제목 편집
+
+private struct ThumbnailEditorSheet: View {
+    @State var title: String
+    @State var date: String
+    let onApply: (String, String) async -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("썸네일 제목") {
+                    TextField("제목", text: $title, axis: .vertical)
+                        .lineLimit(2...5)
+                }
+                Section("썸네일 날짜") {
+                    TextField("예: 2026-08-26", text: $date)
+                }
+                Section {
+                    EmptyView()
+                } footer: {
+                    Text("적용하면 첫 번째 이미지(01.jpg)가 새 제목·날짜로 다시 생성됩니다. 비워두면 원래 공지 제목/날짜를 사용합니다.")
+                }
+            }
+            .navigationTitle("썸네일 수정")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("취소") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("적용") {
+                        let t = title, d = date
+                        dismiss()
+                        Task { await onApply(t, d) }
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
 }
 
 // MARK: - 전체화면 사진 뷰어

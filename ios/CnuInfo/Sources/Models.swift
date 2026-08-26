@@ -43,6 +43,8 @@ struct NoticeDetail: Codable {
     let images: [NoticeImage]
     let copyText: String
     let content: String
+    let thumbTitle: String
+    let thumbDate: String
 
     enum CodingKeys: String, CodingKey {
         case noticeKey = "notice_key"
@@ -54,6 +56,8 @@ struct NoticeDetail: Codable {
         case images
         case copyText = "copy_text"
         case content
+        case thumbTitle = "thumb_title"
+        case thumbDate = "thumb_date"
     }
 }
 
