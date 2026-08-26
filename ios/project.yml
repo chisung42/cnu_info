@@ -1,0 +1,48 @@
+name: CnuInfo
+options:
+  bundleIdPrefix: kr.moonhome
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  CnuInfo:
+    type: application
+    platform: iOS
+    sources:
+      - CnuInfo/Sources
+    info:
+      path: CnuInfo/Info.plist
+      properties:
+        CFBundleDisplayName: CNU Info
+        UILaunchScreen: {}
+        NSPhotoLibraryAddUsageDescription: 새 공지 이미지를 사진 앱에 저장하기 위해 필요합니다.
+        LSApplicationQueriesSchemes:
+          - instagram
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: kr.moonhome.cnuinfo
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: CNU Info
+  CnuInfoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - CnuInfoUITests
+    dependencies:
+      - target: CnuInfo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: kr.moonhome.cnuinfo.uitests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  CnuInfo:
+    build:
+      targets:
+        CnuInfo: all
+        CnuInfoUITests: [test]
+    test:
+      targets:
+        - CnuInfoUITests

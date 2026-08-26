@@ -22,3 +22,4 @@ __pycache__/
 /package.json
 /package-lock.json
 /proxy.js
+.app_api_key
