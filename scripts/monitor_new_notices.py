@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 import threading
@@ -245,6 +246,18 @@ def monitor(
     # 새로고침 요청 플래그
     refresh_requested = threading.Event()
     should_quit = threading.Event()
+
+    def signal_refresh(_signum: int, _frame: Any) -> None:
+        """Allow a managed service to request the same refresh as typing r."""
+        print("\n[관리 요청] 즉시 새로고침을 시작합니다...")
+        refresh_requested.set()
+
+    # SIGUSR1 is used by the dashboard's fixed "새로고침" operation. The
+    # handler only flips an Event, so crawling itself remains in this loop.
+    try:
+        signal.signal(signal.SIGUSR1, signal_refresh)
+    except (AttributeError, ValueError):
+        pass
 
     def input_listener():
         """사용자 입력을 받는 스레드"""

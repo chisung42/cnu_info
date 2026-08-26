@@ -259,10 +259,10 @@ ADMIN_OPERATION_COMMANDS: dict[str, list[tuple[str, list[str]]]] = {
         ("웹 대시보드 로그", ["journalctl", "-u", "cnu-info-web.service", "-n", "60", "--no-pager"]),
         ("크롤러 로그", ["journalctl", "-u", "cnu-info-monitor.service", "-n", "60", "--no-pager"]),
     ],
-    "restart_crawler": [
+    "refresh_crawler": [
         (
-            "크롤러 재시작",
-            ["sudo", "-n", "systemctl", "restart", "cnu-info-monitor.service"],
+            "새로고침 신호 전송",
+            ["sudo", "-n", "systemctl", "kill", "-s", "USR1", "cnu-info-monitor.service"],
         ),
         ("크롤러 상태", ["systemctl", "is-active", "cnu-info-monitor.service"]),
     ],
@@ -542,7 +542,7 @@ TEMPLATE = """
             <div class="admin-actions">
                 <button type="button" data-admin-operation="status">상태 확인</button>
                 <button type="button" data-admin-operation="logs">최근 로그</button>
-                <button type="button" data-admin-operation="restart_crawler">크롤러 즉시 재시작</button>
+                <button type="button" data-admin-operation="refresh_crawler">새로고침 (r)</button>
             </div>
             <pre id="admin-output">상태 확인을 누르면 서버 정보를 표시합니다.</pre>
         </section>
