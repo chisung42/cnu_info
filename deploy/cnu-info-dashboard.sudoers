@@ -1,0 +1,4 @@
+# The Flask dashboard runs as moon. Only this fixed service restart is granted;
+# no shell, arbitrary command, or broader sudo permission is allowed.
+Cmnd_Alias CNU_INFO_DASHBOARD = /usr/bin/systemctl restart cnu-info-monitor.service
+moon ALL=(root) NOPASSWD: CNU_INFO_DASHBOARD

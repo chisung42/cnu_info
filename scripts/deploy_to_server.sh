@@ -26,6 +26,8 @@ ssh -p "$REMOTE_PORT" "$REMOTE_HOST" "
   sudo install -m 644 deploy/cnu-info-web.service /etc/systemd/system/cnu-info-web.service
   sudo install -m 644 deploy/cnu-info-monitor.service /etc/systemd/system/cnu-info-monitor.service
   sudo systemctl daemon-reload
+  sudo install -m 440 deploy/cnu-info-dashboard.sudoers /etc/sudoers.d/cnu-info-dashboard
+  sudo visudo -cf /etc/sudoers.d/cnu-info-dashboard
   sudo install -m 644 deploy/cnu-info.nginx /etc/nginx/sites-available/cnu-info
   sudo nginx -t
   sudo systemctl reload nginx

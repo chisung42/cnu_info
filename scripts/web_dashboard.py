@@ -247,6 +247,59 @@ def _renumber_result_files(paths: list[str]) -> tuple[list[str], dict[str, str]]
 app = Flask(__name__)
 
 
+# The dashboard is reachable through a public Funnel URL. Do not turn this
+# into a general-purpose shell: every executable below is deliberately fixed.
+ADMIN_OPERATION_COMMANDS: dict[str, list[tuple[str, list[str]]]] = {
+    "status": [
+        ("서비스", ["systemctl", "is-active", "cnu-info-web.service", "cnu-info-monitor.service"]),
+        ("코드 버전", ["git", "-C", BASE_DIR, "rev-parse", "--short", "HEAD"]),
+        ("디스크", ["df", "-h", BASE_DIR]),
+    ],
+    "logs": [
+        ("웹 대시보드 로그", ["journalctl", "-u", "cnu-info-web.service", "-n", "60", "--no-pager"]),
+        ("크롤러 로그", ["journalctl", "-u", "cnu-info-monitor.service", "-n", "60", "--no-pager"]),
+    ],
+    "restart_crawler": [
+        (
+            "크롤러 재시작",
+            ["sudo", "-n", "systemctl", "restart", "cnu-info-monitor.service"],
+        ),
+        ("크롤러 상태", ["systemctl", "is-active", "cnu-info-monitor.service"]),
+    ],
+}
+
+
+def _run_admin_operation(operation: str) -> tuple[bool, str]:
+    commands = ADMIN_OPERATION_COMMANDS.get(operation)
+    if not commands:
+        return False, "허용되지 않은 작업입니다."
+
+    chunks: list[str] = []
+    success = True
+    for label, command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            output = (completed.stdout + completed.stderr).strip() or "(출력 없음)"
+            chunks.append(f"$ {label}\n{output}")
+            if completed.returncode != 0:
+                success = False
+        except subprocess.TimeoutExpired:
+            chunks.append(f"$ {label}\n시간 초과 (20초)")
+            success = False
+        except OSError as exc:
+            chunks.append(f"$ {label}\n실행 실패: {exc}")
+            success = False
+
+    return success, "\n\n".join(chunks)[-20000:]
+
+
 class DashboardRequestHandler(WSGIRequestHandler):
     """Keep the terminal readable while the dashboard loads many previews."""
 
@@ -455,6 +508,14 @@ TEMPLATE = """
         .page-info { font-size: 13px; color: #6b7280; display: flex; align-items: center; gap: 8px; }
         .toast { position: fixed; right: 20px; bottom: 20px; background: rgba(17,24,39,0.9); color: #fff; padding: 12px 18px; border-radius: 8px; opacity: 0; transition: opacity .3s ease; pointer-events: none; }
         .toast.show { opacity: 1; }
+        .admin-panel { margin: 0 0 24px; padding: 18px; border-radius: 12px; background: #111827; color: #e5e7eb; box-shadow: 0 1px 4px rgba(15,23,42,0.2); }
+        .admin-panel h2 { margin: 0 0 6px; font-size: 17px; color: #fff; }
+        .admin-panel p { margin: 0 0 12px; color: #cbd5e1; font-size: 13px; }
+        .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+        .admin-actions button { border: 1px solid #475569; border-radius: 7px; background: #1e293b; color: #f8fafc; padding: 8px 11px; cursor: pointer; font-size: 13px; }
+        .admin-actions button:hover { background: #334155; }
+        .admin-actions button:disabled { opacity: .55; cursor: wait; }
+        #admin-output { margin: 0; min-height: 100px; max-height: 360px; overflow: auto; white-space: pre-wrap; background: #020617; border: 1px solid #334155; border-radius: 8px; padding: 12px; color: #d1fae5; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
         @media (max-width: 768px) {
             header { padding: 18px; }
             .container { padding: 0 14px 30px; }
@@ -475,6 +536,16 @@ TEMPLATE = """
             <span>이미지 생성 완료: {{ with_images }}건</span>
             <span>최근 업데이트: {{ last_updated }}</span>
         </div>
+        <section class="admin-panel" aria-label="서버 운영 도구">
+            <h2>서버 운영</h2>
+            <p>허용된 작업만 실행됩니다. 임의 명령어 실행 기능은 제공하지 않습니다.</p>
+            <div class="admin-actions">
+                <button type="button" data-admin-operation="status">상태 확인</button>
+                <button type="button" data-admin-operation="logs">최근 로그</button>
+                <button type="button" data-admin-operation="restart_crawler">크롤러 즉시 재시작</button>
+            </div>
+            <pre id="admin-output">상태 확인을 누르면 서버 정보를 표시합니다.</pre>
+        </section>
         {% if board_groups %}
         <div class="tabs" id="tabs">
             {% for group in board_groups %}
@@ -534,6 +605,28 @@ TEMPLATE = """
             toast.textContent = message;
             toast.classList.add("show");
             setTimeout(() => toast.classList.remove("show"), 1800);
+        }
+
+        function runAdminOperation(operation, button) {
+            const output = document.getElementById("admin-output");
+            if (!output || !operation) return;
+            document.querySelectorAll("[data-admin-operation]").forEach(item => item.disabled = true);
+            output.textContent = "실행 중...";
+            fetch(`/admin/operations/${operation}`, {
+                method: "POST",
+                headers: { "X-CNU-Admin-Action": "run" },
+            })
+                .then(response => response.json())
+                .then(data => {
+                    output.textContent = data.output || data.error || "출력이 없습니다.";
+                    if (!data.success) showToast(data.error || "작업이 실패했습니다.");
+                })
+                .catch(err => {
+                    console.error(err);
+                    output.textContent = "작업 요청 중 오류가 발생했습니다.";
+                    showToast("서버 작업 실패");
+                })
+                .finally(() => document.querySelectorAll("[data-admin-operation]").forEach(item => item.disabled = false));
         }
         function openFolder(noticeKey) {
             fetch(`/open-folder/${noticeKey}`)
@@ -926,6 +1019,9 @@ TEMPLATE = """
             });
             setupUploadZones();
             setupDragAndDrop();
+            document.querySelectorAll("[data-admin-operation]").forEach(button => {
+                button.addEventListener("click", () => runAdminOperation(button.dataset.adminOperation, button));
+            });
         });
     </script>
 </body>
@@ -1133,6 +1229,17 @@ def index():
         with_images=with_images,
         last_updated=last_updated,
     )
+
+
+@app.route("/admin/operations/<operation>", methods=["POST"])
+def run_admin_operation(operation: str):
+    # A custom header prevents cross-site HTML form submissions from triggering
+    # a server action. Nginx Basic Auth remains the primary access boundary.
+    if request.headers.get("X-CNU-Admin-Action") != "run":
+        return jsonify({"success": False, "error": "관리 작업 요청이 거부되었습니다."}), 403
+
+    success, output = _run_admin_operation(operation)
+    return jsonify({"success": success, "output": output}), (200 if success else 500)
 
 
 @app.route("/board-page/<board_id>/<int:page_idx>")
