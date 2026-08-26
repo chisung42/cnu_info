@@ -2251,10 +2251,13 @@ def api_notice_detail(notice_key: str):
 
     board_id = notice.get("board_id") or "default"
     content = notice.get("content") or ""
+    image_result = notice.get("image_result") or {}
     detail = _api_notice_summary(notice)
     detail["images"] = images
     detail["copy_text"] = make_display_content(board_id, content)
     detail["content"] = content
+    detail["thumb_title"] = image_result.get("thumbnail_title") or notice.get("title") or ""
+    detail["thumb_date"] = image_result.get("thumbnail_date") or notice.get("date") or ""
     return jsonify({"success": True, "notice": detail})
 
 
@@ -2312,6 +2315,27 @@ def api_mark_posted(notice_key: str):
         return jsonify({"success": False, "error": f"데이터 저장 실패: {exc}"}), 500
 
     return jsonify({"success": True, "posted": posted})
+
+
+@app.route("/api/refresh", methods=["POST"])
+def api_refresh_crawler():
+    """크롤러(monitor)에 즉시 수집 신호를 보낸다 — 텔레그램 /r과 동일."""
+    _require_api_key()
+    success, output = _run_admin_operation("refresh_crawler")
+    return jsonify({"success": success, "output": output}), (200 if success else 500)
+
+
+@app.route("/api/notices/<path:notice_key>/recrawl", methods=["POST"])
+def api_recrawl_notice(notice_key: str):
+    _require_api_key()
+    return recrawl_notice(notice_key)
+
+
+@app.route("/api/notices/<path:notice_key>/thumbnail", methods=["POST"])
+def api_update_thumbnail(notice_key: str):
+    """JSON {title, date}로 썸네일(01.jpg) 제목/날짜를 바꿔 재생성한다."""
+    _require_api_key()
+    return update_thumbnail_header(notice_key)
 
 
 def main() -> None:
