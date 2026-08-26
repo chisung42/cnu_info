@@ -43,13 +43,14 @@ def _to_rel(path: str | None) -> str:
 SUPPORTED_SOURCE_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 _PAGE_NUMBER_SUFFIX_PATTERN = re.compile(r"(?:[_-])(?P<digits>\d{2,4})$")
 LOGO_PATH = BASE_PATH / "assets" / "cnu_logo_white.png"
+PRETENDARD_FONT_PATH = BASE_PATH / "assets" / "fonts" / "Pretendard-Regular.otf"
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
-    # Deployment runs on Linux, while local development commonly runs on macOS.
-    # Prefer an installed Korean Noto face on Linux; otherwise Pillow falls back
-    # to its bitmap default font and Hangul becomes tofu squares.
+    # Bundle Pretendard so macOS and Linux render identical Korean notice cards.
+    # Noto/Apple system fonts remain fallbacks for older checkouts.
     candidates = [
+        (str(PRETENDARD_FONT_PATH), 0),
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 1),
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
         ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
