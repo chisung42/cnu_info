@@ -46,14 +46,19 @@ LOGO_PATH = BASE_PATH / "assets" / "cnu_logo_white.png"
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
+    # Deployment runs on Linux, while local development commonly runs on macOS.
+    # Prefer an installed Korean Noto face on Linux; otherwise Pillow falls back
+    # to its bitmap default font and Hangul becomes tofu squares.
     candidates = [
-        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
-        "/System/Library/Fonts/AppleGothic.ttf",
-        "/System/Library/Fonts/Arial.ttf",
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", 4),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 4),
+        ("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0),
+        ("/System/Library/Fonts/AppleGothic.ttf", 0),
+        ("/System/Library/Fonts/Arial.ttf", 0),
     ]
-    for path in candidates:
+    for path, index in candidates:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, size, index=index)
         except Exception:
             continue
     return ImageFont.load_default()
