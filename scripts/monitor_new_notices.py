@@ -75,18 +75,20 @@ except ImportError as exc:
 DATA_PATH = BASE_PATH / "data"
 LINKS_PATH = DATA_PATH / "notice_links.json"
 DETAILS_PATH = DATA_PATH / "notices_db.json"
+TELEGRAM_UPDATES_PATH = DATA_PATH / "telegram_updates.json"
 DATA_DIR = str(DATA_PATH)
 LINKS_FILE = str(LINKS_PATH)
 DETAILS_FILE = str(DETAILS_PATH)
 
 
 def _set_data_dir(data_dir: str | None) -> None:
-    global DATA_PATH, LINKS_PATH, DETAILS_PATH, DATA_DIR, LINKS_FILE, DETAILS_FILE
+    global DATA_PATH, LINKS_PATH, DETAILS_PATH, TELEGRAM_UPDATES_PATH, DATA_DIR, LINKS_FILE, DETAILS_FILE
     if not data_dir:
         return
     DATA_PATH = Path(_to_abs(data_dir)).resolve()
     LINKS_PATH = DATA_PATH / "notice_links.json"
     DETAILS_PATH = DATA_PATH / "notices_db.json"
+    TELEGRAM_UPDATES_PATH = DATA_PATH / "telegram_updates.json"
     DATA_DIR = str(DATA_PATH)
     LINKS_FILE = str(LINKS_PATH)
     DETAILS_FILE = str(DETAILS_PATH)
@@ -245,6 +247,11 @@ def _telegram_message(detail: dict, board_name: str) -> str:
 
 def _send_telegram_notice(detail: dict, board_name: str) -> tuple[bool, str]:
     """Send one newly crawled notice; disabled config never blocks crawling."""
+    return _send_telegram_text(_telegram_message(detail, board_name))
+
+
+def _send_telegram_text(text: str) -> tuple[bool, str]:
+    """Send a plain-text message to the configured Telegram chat."""
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
@@ -255,7 +262,7 @@ def _send_telegram_notice(detail: dict, board_name: str) -> tuple[bool, str]:
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={
                 "chat_id": chat_id,
-                "text": _telegram_message(detail, board_name),
+                "text": text[:4096],
                 "disable_web_page_preview": False,
             },
             timeout=15,
@@ -267,6 +274,79 @@ def _send_telegram_notice(detail: dict, board_name: str) -> tuple[bool, str]:
         return True, "전송 완료"
     except (requests.RequestException, ValueError) as exc:
         return False, str(exc)
+
+
+def _is_telegram_refresh_command(text: object) -> bool:
+    """Accept /r and /refresh, including Telegram's /r@bot_name form."""
+    command = str(text or "").strip().lower().split(maxsplit=1)[0]
+    command = command.split("@", 1)[0]
+    return command in {"/r", "/refresh"}
+
+
+def _telegram_command_listener(
+    refresh_requested: threading.Event,
+    should_quit: threading.Event,
+) -> None:
+    """Long-poll Telegram for an owner-only refresh command in the background."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    configured_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not configured_chat_id:
+        return
+
+    # Commands can only be authenticated against a numeric private/group chat
+    # id. A public-channel @username is valid for outgoing notices but cannot
+    # securely identify the sender of an incoming command.
+    try:
+        allowed_chat_id = int(configured_chat_id)
+    except ValueError:
+        print("[텔레그램] /r 명령 수신 비활성: TELEGRAM_CHAT_ID는 숫자여야 합니다.")
+        return
+
+    state = _load_json_dict(str(TELEGRAM_UPDATES_PATH))
+    last_update_id = state.get("state", {}).get("last_update_id", -1)
+    try:
+        offset = int(last_update_id) + 1
+    except (TypeError, ValueError):
+        offset = 0
+
+    print("[텔레그램] /r 또는 /refresh 명령 대기 중")
+    while not should_quit.is_set():
+        try:
+            response = requests.get(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                params={
+                    "offset": offset,
+                    "timeout": 25,
+                    "allowed_updates": json.dumps(["message"]),
+                },
+                timeout=35,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not payload.get("ok"):
+                raise ValueError(str(payload.get("description") or "Telegram API 응답 오류"))
+
+            for update in payload.get("result") or []:
+                update_id = update.get("update_id")
+                if not isinstance(update_id, int):
+                    continue
+                offset = max(offset, update_id + 1)
+                message = update.get("message") or {}
+                chat_id = (message.get("chat") or {}).get("id")
+                if chat_id != allowed_chat_id or not _is_telegram_refresh_command(message.get("text")):
+                    continue
+
+                print("[텔레그램 요청] 즉시 새로고침을 시작합니다...")
+                refresh_requested.set()
+                sent, result = _send_telegram_text("✅ CNU Info 새로고침을 시작합니다.")
+                if not sent:
+                    print(f"[텔레그램 경고] /r 응답 전송 실패: {result}")
+
+            state = {"state": {"last_update_id": offset - 1}}
+            _write_json(str(TELEGRAM_UPDATES_PATH), state)
+        except (requests.RequestException, ValueError) as exc:
+            print(f"[텔레그램 경고] 명령 확인 실패: {exc}")
+            should_quit.wait(5)
 
 
 def monitor(
@@ -335,6 +415,12 @@ def monitor(
     # 입력 리스너 스레드 시작
     listener_thread = threading.Thread(target=input_listener, daemon=True)
     listener_thread.start()
+    telegram_thread = threading.Thread(
+        target=_telegram_command_listener,
+        args=(refresh_requested, should_quit),
+        daemon=True,
+    )
+    telegram_thread.start()
 
     def process_notice(key: str, link_info: dict, board: dict) -> tuple[str, dict | None, str | None]:
         board_id = board["id"]
@@ -468,11 +554,12 @@ def monitor(
         while not should_quit.is_set():
             cycle_start = time.time()
 
+            # A request that arrives while this cycle runs must survive until
+            # the cycle finishes, so clear only before starting it.
+            refresh_requested.clear()
+
             # 크롤링 사이클 실행
             run_crawl_cycle()
-
-            # 새로고침 플래그 초기화
-            refresh_requested.clear()
 
             elapsed = time.time() - cycle_start
             sleep_seconds = max(5, interval_minutes * 60 - int(elapsed))

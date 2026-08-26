@@ -83,6 +83,8 @@ TELEGRAM_BOT_TOKEN=봇_API_토큰
 TELEGRAM_CHAT_ID=받을_개인_또는_그룹_대화방_ID
 ```
 
+봇이 메시지를 보낼 대화방에서 `/r` 또는 `/refresh`를 보내면 다음 30분 주기를 기다리지 않고 즉시 크롤링합니다. 보안을 위해 `TELEGRAM_CHAT_ID`가 숫자형 개인/그룹 대화방 ID일 때만 명령을 받습니다.
+
 스크립트가 실행되면 `data/notice_links.json`과 `data/notices_db.json`, 그리고 `attachments/<board_id>/<notice_id>/...` 구조가 자동 생성됩니다.
 
 ### 3. 웹 대시보드 실행
