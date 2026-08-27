@@ -41,6 +41,16 @@ try:
 except ImportError:
     from notice_display import make_display_content
 
+try:
+    try:
+        from scripts import instagram_sync
+    except ImportError:
+        import instagram_sync
+    INSTAGRAM_SYNC_AVAILABLE = True
+except Exception:
+    instagram_sync = None
+    INSTAGRAM_SYNC_AVAILABLE = False
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_PATH = SCRIPT_DIR.parent
 BASE_DIR = str(BASE_PATH)
@@ -2195,6 +2205,10 @@ def _api_notice_summary(notice: dict) -> dict:
         "image_count": len([p for p in generated if p]),
         "posted": bool(notice.get("posted")),
         "posted_at": notice.get("posted_at") or "",
+        # 인스타그램 대조 결과. ig_permalink가 있으면 실제 게시물이 확인된 것이다.
+        "ig_permalink": notice.get("ig_permalink") or "",
+        "ig_match": notice.get("ig_match") or "",
+        "ig_checked_at": notice.get("ig_checked_at") or "",
     }
 
 
@@ -2377,6 +2391,111 @@ def api_update_thumbnail(notice_key: str):
     """JSON {title, date}로 썸네일(01.jpg) 제목/날짜를 바꿔 재생성한다."""
     _require_api_key()
     return update_thumbnail_header(notice_key)
+
+
+def _iter_db_entries(db_data: Any):
+    """notices_db.json이 dict든 list든 (notice_key, 항목)으로 순회한다."""
+    if isinstance(db_data, dict):
+        for key, value in db_data.items():
+            if isinstance(value, dict):
+                yield str(value.get("notice_key") or key), value
+    elif isinstance(db_data, list):
+        for item in db_data:
+            if isinstance(item, dict) and item.get("notice_key"):
+                yield str(item["notice_key"]), item
+
+
+def _within_ig_window(entry: dict, window_start: str) -> bool:
+    """공지가 인스타그램 조회 구간(가져온 게시물 중 가장 오래된 날짜 이후)에 있는지."""
+    if not window_start:
+        return True
+    notice_day = (entry.get("date") or entry.get("crawled_at") or "")[:10]
+    return bool(notice_day) and notice_day >= window_start[:10]
+
+
+@app.route("/api/instagram/status")
+def api_instagram_status():
+    _require_api_key()
+    if not INSTAGRAM_SYNC_AVAILABLE:
+        return jsonify({"success": False, "configured": False, "error": "모듈을 사용할 수 없습니다."}), 500
+    status = instagram_sync.token_status(DATA_DIR)
+    return jsonify({"success": True, **status})
+
+
+@app.route("/api/instagram/sync", methods=["POST"])
+def api_instagram_sync():
+    """인스타그램 게시물을 가져와 어떤 공지가 실제로 올라갔는지 대조한다."""
+    _require_api_key()
+    if not INSTAGRAM_SYNC_AVAILABLE:
+        return jsonify({"success": False, "error": "인스타그램 동기화 모듈을 사용할 수 없습니다."}), 500
+
+    payload = request.get_json(silent=True) or {}
+    raw_max = payload.get("max_items")
+    max_items = raw_max if isinstance(raw_max, int) and 0 < raw_max <= 1000 else 400
+
+    try:
+        token = instagram_sync.refresh_token_if_needed(DATA_DIR)
+        account = instagram_sync.fetch_account(token)
+        media = instagram_sync.fetch_media(token, max_items=max_items)
+    except instagram_sync.InstagramNotConfigured as exc:
+        return jsonify({"success": False, "configured": False, "error": str(exc)}), 409
+    except instagram_sync.InstagramAPIError as exc:
+        return jsonify({"success": False, "configured": True, "error": str(exc)}), 502
+
+    notices = load_notice_dict()
+    matches = instagram_sync.match_media(media, notices.values())
+    window_start = instagram_sync.oldest_timestamp(media)
+    checked_at = datetime.now().isoformat(timespec="seconds")
+
+    db_data = _load_json(NOTICE_DB_PATH)
+    if not isinstance(db_data, (dict, list)):
+        return jsonify({"success": False, "error": "데이터 파일을 읽을 수 없습니다."}), 500
+
+    verified = 0
+    newly_marked = 0
+    unverified: list[str] = []
+
+    for key, entry in _iter_db_entries(db_data):
+        entry["ig_checked_at"] = checked_at
+        match = matches.get(key)
+        if match:
+            verified += 1
+            entry["ig_media_id"] = match["media_id"]
+            entry["ig_permalink"] = match["permalink"]
+            entry["ig_timestamp"] = match["timestamp"]
+            entry["ig_match"] = match["confidence"]
+            if not entry.get("posted"):
+                entry["posted"] = True
+                entry["posted_at"] = match["timestamp"] or checked_at
+                newly_marked += 1
+            continue
+
+        # 못 찾은 공지는 표시만 지운다. posted는 건드리지 않는다 —
+        # 조회 구간보다 오래된 게시물이거나 캡션을 크게 고쳤을 수 있다.
+        for field in ("ig_media_id", "ig_permalink", "ig_timestamp", "ig_match"):
+            entry.pop(field, None)
+        if entry.get("posted") and _within_ig_window(entry, window_start):
+            unverified.append(key)
+
+    try:
+        with open(NOTICE_DB_PATH, "w", encoding="utf-8") as fh:
+            json.dump(db_data, fh, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        return jsonify({"success": False, "error": f"데이터 저장 실패: {exc}"}), 500
+
+    summary = {
+        "account": account.get("username") or "",
+        "account_media_count": account.get("media_count") or 0,
+        "fetched_media": len(media),
+        "window_start": window_start,
+        "verified": verified,
+        "newly_marked": newly_marked,
+        "unverified": len(unverified),
+        "unverified_keys": unverified[:50],
+        "synced_at": checked_at,
+    }
+    instagram_sync.save_sync_summary(DATA_DIR, summary)
+    return jsonify({"success": True, **summary})
 
 
 def main() -> None:
