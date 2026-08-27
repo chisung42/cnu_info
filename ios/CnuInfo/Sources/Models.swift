@@ -125,6 +125,8 @@ struct InstagramSyncResult: Codable {
     let verified: Int
     let newlyMarked: Int
     let unverified: Int
+    /// 어떤 공지와도 맞지 않은 게시물 — 직접 올린 게시물이므로 오류가 아니다.
+    let unmatchedMedia: Int?
 
     enum CodingKeys: String, CodingKey {
         case account
@@ -132,6 +134,7 @@ struct InstagramSyncResult: Codable {
         case verified
         case newlyMarked = "newly_marked"
         case unverified
+        case unmatchedMedia = "unmatched_media"
     }
 }
 

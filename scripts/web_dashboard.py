@@ -2429,9 +2429,10 @@ def api_instagram_sync():
     if not INSTAGRAM_SYNC_AVAILABLE:
         return jsonify({"success": False, "error": "인스타그램 동기화 모듈을 사용할 수 없습니다."}), 500
 
+    # 기본은 최근 게시물만 보는 증분 대조다. 과거 전체를 다시 훑을 때만 max_items를 키운다.
     payload = request.get_json(silent=True) or {}
     raw_max = payload.get("max_items")
-    max_items = raw_max if isinstance(raw_max, int) and 0 < raw_max <= 1000 else 400
+    max_items = raw_max if isinstance(raw_max, int) and 0 < raw_max <= 1000 else 12
 
     try:
         token = instagram_sync.refresh_token_if_needed(DATA_DIR)
@@ -2443,7 +2444,7 @@ def api_instagram_sync():
         return jsonify({"success": False, "configured": True, "error": str(exc)}), 502
 
     notices = load_notice_dict()
-    matches = instagram_sync.match_media(media, notices.values())
+    matches, match_stats = instagram_sync.match_media(media, notices.values())
     window_start = instagram_sync.oldest_timestamp(media)
     checked_at = datetime.now().isoformat(timespec="seconds")
 
@@ -2456,10 +2457,10 @@ def api_instagram_sync():
     unverified: list[str] = []
 
     for key, entry in _iter_db_entries(db_data):
-        entry["ig_checked_at"] = checked_at
         match = matches.get(key)
         if match:
             verified += 1
+            entry["ig_checked_at"] = checked_at
             entry["ig_media_id"] = match["media_id"]
             entry["ig_permalink"] = match["permalink"]
             entry["ig_timestamp"] = match["timestamp"]
@@ -2470,11 +2471,17 @@ def api_instagram_sync():
                 newly_marked += 1
             continue
 
-        # 못 찾은 공지는 표시만 지운다. posted는 건드리지 않는다 —
-        # 조회 구간보다 오래된 게시물이거나 캡션을 크게 고쳤을 수 있다.
-        for field in ("ig_media_id", "ig_permalink", "ig_timestamp", "ig_match"):
-            entry.pop(field, None)
-        if entry.get("posted") and _within_ig_window(entry, window_start):
+        if entry.get("ig_permalink"):
+            # 이전 대조에서 이미 확인된 공지다. 이번 조회 구간에 없더라도 결과를 보존한다.
+            verified += 1
+            continue
+
+        # 조회 구간(가져온 게시물 중 가장 오래된 날짜) 밖의 공지는 판단 근거가 없으므로 건드리지 않는다.
+        if not _within_ig_window(entry, window_start):
+            continue
+
+        entry["ig_checked_at"] = checked_at
+        if entry.get("posted"):
             unverified.append(key)
 
     try:
@@ -2493,6 +2500,7 @@ def api_instagram_sync():
         "unverified": len(unverified),
         "unverified_keys": unverified[:50],
         "synced_at": checked_at,
+        **match_stats,
     }
     instagram_sync.save_sync_summary(DATA_DIR, summary)
     return jsonify({"success": True, **summary})

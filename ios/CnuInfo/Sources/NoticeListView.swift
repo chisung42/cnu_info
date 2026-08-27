@@ -268,6 +268,9 @@ struct NoticeListView: View {
             if result.unverified > 0 {
                 lines.append("확인 안 됨: \(result.unverified)건 — 캡션을 크게 고쳤거나 게시물이 삭제된 경우입니다.")
             }
+            if let own = result.unmatchedMedia, own > 0 {
+                lines.append("공지와 무관한 게시물 \(own)개는 건너뛰었습니다.")
+            }
             noticeMessage = NoticeMessage(title: "인스타그램 대조 완료", body: lines.joined(separator: "\n"))
         } catch {
             noticeMessage = NoticeMessage(title: "대조 실패", body: error.localizedDescription)

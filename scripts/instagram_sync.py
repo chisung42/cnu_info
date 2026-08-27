@@ -39,6 +39,9 @@ SYNC_FILENAME = "instagram_sync.json"
 PREFIX_LEN = 60
 # 접두사가 어긋날 때(운영자가 캡션을 손봤을 때) 허용하는 최소 유사도.
 FUZZY_THRESHOLD = 0.78
+# 이보다 짧은 텍스트는 공지를 구별할 정보가 없다고 보고 대조에서 뺀다.
+# 게시판 머리말만 남는 경우(본문이 이미지에만 있는 공지)가 서로 뒤바뀌는 것을 막는다.
+MIN_MATCH_LEN = 25
 # 토큰을 며칠마다 갱신할지. 만료(60일)보다 넉넉히 앞선다.
 REFRESH_AFTER_DAYS = 30
 MEDIA_FIELDS = "id,caption,permalink,timestamp,media_type"
@@ -242,77 +245,123 @@ def _notice_caption(notice: dict) -> str:
     )
 
 
-def _build_index(notices: Iterable[dict]) -> tuple[dict[str, list[tuple[str, str]]], list[tuple[str, str]]]:
+def _notice_match_texts(notice: dict) -> list[str]:
+    """이 공지의 캡션이 될 수 있는 형태들.
+
+    생성 캡션은 제목을 넣지 않지만, 운영자가 직접 제목을 적어 올리는 경우가 많다.
+    본문이 이미지에만 있는 공지는 제목이 유일한 단서이므로 제목을 붙인 형태도 함께 본다.
+    """
+    board_id = notice.get("board_id") or "default"
+    content = notice.get("content") or ""
+    title = (notice.get("title") or "").strip()
+
+    variants = [make_display_content(board_id, content)]
+    if title:
+        joined = f"{title}\n{content}" if content else title
+        variants.append(make_display_content(board_id, joined))
+    # AI 정리 전 원문으로 올렸을 수도 있다.
+    raw = notice.get("raw_content") or ""
+    if raw and raw != content:
+        variants.append(make_display_content(board_id, raw))
+
+    texts: list[str] = []
+    for variant in variants:
+        norm = normalize_for_match(variant)
+        if len(norm) >= MIN_MATCH_LEN and norm not in texts:
+            texts.append(norm)
+    return texts
+
+
+def _build_index(
+    notices: Iterable[dict],
+) -> tuple[dict[str, list[tuple[str, str]]], list[tuple[str, str]], dict[str, list[str]]]:
+    """(접두사 인덱스, 전체 후보, 동일 텍스트를 공유하는 공지 목록)을 만든다."""
     index: dict[str, list[tuple[str, str]]] = {}
     entries: list[tuple[str, str]] = []
+    keys_by_text: dict[str, list[str]] = {}
     for notice in notices:
         key = notice.get("notice_key")
         if not key:
             continue
-        norm = normalize_for_match(_notice_caption(notice))
-        if not norm:
-            continue
-        entry = (str(key), norm)
-        entries.append(entry)
-        index.setdefault(norm[:PREFIX_LEN], []).append(entry)
-    return index, entries
+        for norm in _notice_match_texts(notice):
+            entry = (str(key), norm)
+            entries.append(entry)
+            index.setdefault(norm[:PREFIX_LEN], []).append(entry)
+            shared = keys_by_text.setdefault(norm, [])
+            if str(key) not in shared:
+                shared.append(str(key))
+    return index, entries, keys_by_text
 
 
 def _best_of(
     candidates: list[tuple[str, str]], caption: str, floor: float = 0.0
-) -> tuple[str | None, float]:
+) -> tuple[tuple[str, str] | None, float]:
     """caption과 가장 비슷한 후보를 찾는다. floor 이하 후보는 빠르게 건너뛴다."""
     matcher = SequenceMatcher(autojunk=False)
     matcher.set_seq2(caption)
-    best_key: str | None = None
+    best: tuple[str, str] | None = None
     best_ratio = floor
-    for key, candidate in candidates:
-        matcher.set_seq1(candidate)
+    for entry in candidates:
+        matcher.set_seq1(entry[1])
         if matcher.real_quick_ratio() < best_ratio or matcher.quick_ratio() < best_ratio:
             continue
         ratio = matcher.ratio()
         if ratio > best_ratio:
-            best_key, best_ratio = key, ratio
-    return best_key, best_ratio
+            best, best_ratio = entry, ratio
+    return best, best_ratio
 
 
-def match_media(media: list[dict], notices: Iterable[dict]) -> dict[str, dict]:
-    """게시물 목록을 공지에 매칭한다. {notice_key: 매칭정보} 형태로 돌려준다."""
-    index, entries = _build_index(notices)
+def match_media(media: list[dict], notices: Iterable[dict]) -> tuple[dict[str, dict], dict]:
+    """게시물 목록을 공지에 대조한다.
+
+    ({notice_key: 매칭정보}, 통계)를 돌려준다. 통계의 unmatched_media는 어떤 공지와도
+    맞지 않은 게시물 수다 — 직접 올린 게시물이 대부분이므로 오류가 아니다.
+    """
+    index, entries, keys_by_text = _build_index(notices)
     matches: dict[str, dict] = {}
+    unmatched_media = 0
+    captionless = 0
 
     for item in media:
         caption = normalize_for_match(item.get("caption"))
-        if not caption:
+        if len(caption) < MIN_MATCH_LEN:
+            captionless += 1
             continue
 
-        key: str | None = None
+        matched: tuple[str, str] | None = None
         confidence = ""
         bucket = index.get(caption[:PREFIX_LEN])
         if bucket:
-            if len(bucket) == 1:
-                key = bucket[0][0]
-            else:
-                key, _ = _best_of(bucket, caption)
+            matched = bucket[0] if len(bucket) == 1 else _best_of(bucket, caption)[0]
             confidence = "exact"
         else:
-            candidate, _ = _best_of(entries, caption, floor=FUZZY_THRESHOLD)
-            if candidate:
-                key, confidence = candidate, "fuzzy"
+            matched = _best_of(entries, caption, floor=FUZZY_THRESHOLD)[0]
+            if matched:
+                confidence = "fuzzy"
 
-        if not key:
+        if not matched:
+            unmatched_media += 1
             continue
-        existing = matches.get(key)
-        if existing and existing.get("confidence") == "exact" and confidence != "exact":
-            continue
-        matches[key] = {
+
+        info = {
             "media_id": item.get("id") or "",
             "permalink": item.get("permalink") or "",
             "timestamp": item.get("timestamp") or "",
             "confidence": confidence,
         }
+        # 본문이 완전히 같은 공지가 여러 건이면(같은 글이 두 번 수집된 경우) 모두 인정한다.
+        # 그러지 않으면 한 건만 확인되고 나머지가 계속 '미업로드'로 남는다.
+        for key in keys_by_text.get(matched[1], [matched[0]]):
+            existing = matches.get(key)
+            if existing and existing.get("confidence") == "exact" and confidence != "exact":
+                continue
+            matches[key] = info
 
-    return matches
+    stats = {
+        "unmatched_media": unmatched_media,
+        "captionless_media": captionless,
+    }
+    return matches, stats
 
 
 def oldest_timestamp(media: list[dict]) -> str:
