@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -2211,6 +2212,7 @@ def api_notices():
     notices = load_notices()
     since = (request.args.get("since") or "").strip()
     unposted_only = request.args.get("unposted") in ("1", "true", "yes")
+    limit = request.args.get("limit", type=int) or 0
 
     items = []
     for notice in notices:
@@ -2220,6 +2222,8 @@ def api_notices():
         if unposted_only and summary["posted"]:
             continue
         items.append(summary)
+        if limit and len(items) >= limit:
+            break
     return jsonify({"success": True, "count": len(items), "notices": items})
 
 
@@ -2261,6 +2265,9 @@ def api_notice_detail(notice_key: str):
     return jsonify({"success": True, "notice": detail})
 
 
+_API_THUMB_WIDTHS = (320, 640)
+
+
 @app.route("/api/media/<path:rel_path>")
 def api_media(rel_path: str):
     _require_api_key()
@@ -2269,6 +2276,27 @@ def api_media(rel_path: str):
         abort(403)
     if not os.path.exists(safe_path):
         abort(404)
+
+    # ?w=320 → 축소 썸네일을 만들어 디스크에 캐시하고 그걸 서빙 (앱 그리드용)
+    width = request.args.get("w", type=int)
+    if width in _API_THUMB_WIDTHS and safe_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+        cache_dir = os.path.join(DATA_DIR, "thumb_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        digest = hashlib.md5(f"{_to_rel(safe_path)}|{width}".encode("utf-8")).hexdigest()
+        thumb_path = os.path.join(cache_dir, f"{digest}.jpg")
+        try:
+            src_mtime = os.path.getmtime(safe_path)
+            if not os.path.exists(thumb_path) or os.path.getmtime(thumb_path) < src_mtime:
+                with Image.open(safe_path) as img:
+                    img = img.convert("RGB")
+                    ratio = width / img.width
+                    if ratio < 1:
+                        img = img.resize((width, max(1, int(img.height * ratio))), Image.LANCZOS)
+                    img.save(thumb_path, "JPEG", quality=80)
+            return send_file(thumb_path, mimetype="image/jpeg")
+        except Exception:
+            pass  # 썸네일 생성 실패 시 원본으로 폴백
+
     return send_file(safe_path)
 
 
