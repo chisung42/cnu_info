@@ -265,6 +265,13 @@ def _renumber_result_files(paths: list[str]) -> tuple[list[str], dict[str, str]]
         directory = os.path.dirname(tmp_path)
         final_path = os.path.join(directory, f"{position:02d}{ext}")
         os.replace(tmp_path, final_path)
+        # rename은 mtime을 그대로 옮긴다. 그러면 같은 파일명이 다른 이미지를 담게 되어도
+        # ?v= 캐시버스터와 썸네일 캐시가 낡은 이미지를 계속 내보낸다. 삭제·순서 변경이
+        # 화면에 반영되지 않는 원인이므로 여기서 수정 시각을 새로 찍는다.
+        try:
+            os.utime(final_path, None)
+        except OSError:
+            pass
         new_rel = _to_rel(final_path)
         new_paths.append(new_rel)
         mapping[old_rel] = new_rel
