@@ -77,6 +77,19 @@ struct APIClient {
         _ = try await request("/api/refresh", method: "POST")
     }
 
+    /// 서버 콘솔 출력(status/logs)을 가져온다 — 조회 전용
+    func fetchConsole(_ operation: String) async throws -> String {
+        struct ConsoleResponse: Codable {
+            let success: Bool
+            let output: String
+        }
+        let data = try await request("/api/console/\(operation)")
+        guard let decoded = try? JSONDecoder().decode(ConsoleResponse.self, from: data) else {
+            throw APIError.decoding
+        }
+        return decoded.output
+    }
+
     /// 공지 하나를 처음부터 다시 크롤링한다 (수 분 걸릴 수 있음)
     func recrawlNotice(key: String) async throws {
         let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key

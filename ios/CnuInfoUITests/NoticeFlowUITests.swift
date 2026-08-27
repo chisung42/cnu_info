@@ -22,6 +22,16 @@ final class NoticeFlowUITests: XCTestCase {
         XCTAssertTrue(allChip.exists, "전체 칩이 보여야 한다")
         attach(name: "02-list-chips")
 
+        // 서버 콘솔 열기 → 로그 로드 확인 → 닫기
+        let consoleButton = app.buttons["console-button"]
+        XCTAssertTrue(consoleButton.exists, "콘솔 버튼이 있어야 한다")
+        consoleButton.tap()
+        let closeConsole = app.buttons["닫기"]
+        XCTAssertTrue(closeConsole.waitForExistence(timeout: 10), "콘솔 화면이 열려야 한다")
+        sleep(3)
+        attach(name: "06-console")
+        closeConsole.tap()
+
         firstCell.tap()
 
         // 상세 화면의 핵심 버튼 확인

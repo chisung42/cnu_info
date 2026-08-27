@@ -9,6 +9,7 @@ struct NoticeListView: View {
     @State private var selectedBoard: String?
     @State private var isRefreshingCrawler = false
     @State private var crawlerMessage: String?
+    @State private var showConsole = false
 
     private let api = APIClient()
 
@@ -57,6 +58,15 @@ struct NoticeListView: View {
                 }
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showConsole = true
+                    } label: {
+                        Image(systemName: "terminal")
+                    }
+                    .disabled(AppSettings.apiKey.isEmpty)
+                    .accessibilityIdentifier("console-button")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await refreshCrawler() }
@@ -103,6 +113,9 @@ struct NoticeListView: View {
                 Task { await load() }
             }) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showConsole) {
+                ConsoleView()
             }
             .overlay {
                 if isLoading && notices.isEmpty {
