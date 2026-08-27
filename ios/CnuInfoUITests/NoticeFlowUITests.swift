@@ -22,6 +22,37 @@ final class NoticeFlowUITests: XCTestCase {
         XCTAssertTrue(allChip.exists, "전체 칩이 보여야 한다")
         attach(name: "02-list-chips")
 
+        // 업로드 상태 필터 전환 (인스타 대조 결과로 걸러 보는 기능)
+        let filterMenu = app.buttons["filter-menu"]
+        XCTAssertTrue(filterMenu.exists, "업로드 상태 필터 버튼이 있어야 한다")
+        filterMenu.tap()
+        let unverifiedOption = app.buttons["확인 안 됨"]
+        XCTAssertTrue(unverifiedOption.waitForExistence(timeout: 5), "필터 메뉴에 '확인 안 됨'이 있어야 한다")
+        unverifiedOption.tap()
+        // 결과가 있든 없든 화면이 정상적으로 갱신되어야 한다
+        let filtered = app.cells.firstMatch.waitForExistence(timeout: 5)
+            || app.staticTexts["확인 안 된 공지가 없습니다"].waitForExistence(timeout: 5)
+        XCTAssertTrue(filtered, "필터 적용 후 목록 또는 빈 상태가 표시되어야 한다")
+        attach(name: "07-filter-unverified")
+
+        filterMenu.tap()
+        let notPostedOption = app.buttons["미업로드"]
+        XCTAssertTrue(notPostedOption.waitForExistence(timeout: 5))
+        notPostedOption.tap()
+        XCTAssertTrue(app.cells.firstMatch.waitForExistence(timeout: 15), "미업로드 목록으로 되돌아와야 한다")
+
+        // 인스타그램 대조 — 토큰 미설정 상태에서 안내 알림이 떠야 한다
+        let listMenu = app.buttons["list-menu"]
+        XCTAssertTrue(listMenu.exists, "목록 메뉴 버튼이 있어야 한다")
+        listMenu.tap()
+        let syncButton = app.buttons["인스타그램 대조"]
+        XCTAssertTrue(syncButton.waitForExistence(timeout: 5), "메뉴에 인스타그램 대조가 있어야 한다")
+        syncButton.tap()
+        let syncAlertOK = app.buttons["확인"]
+        XCTAssertTrue(syncAlertOK.waitForExistence(timeout: 60), "대조 결과 알림이 떠야 한다")
+        attach(name: "08-instagram-sync-alert")
+        syncAlertOK.tap()
+
         // 서버 콘솔 열기 → 로그 로드 확인 → 닫기
         let consoleButton = app.buttons["console-button"]
         XCTAssertTrue(consoleButton.exists, "콘솔 버튼이 있어야 한다")

@@ -37,7 +37,11 @@ struct SettingsView: View {
             .navigationTitle("설정")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("완료") { dismiss() }
+                    Button("완료") {
+                        // 주소가 바뀌었을 수 있으니 다음 요청에서 다시 해석하게 한다.
+                        Task { await EndpointResolver.shared.invalidate() }
+                        dismiss()
+                    }
                 }
             }
         }
@@ -46,9 +50,14 @@ struct SettingsView: View {
     private func testConnection() async {
         isTesting = true
         defer { isTesting = false }
+        await EndpointResolver.shared.invalidate()
         do {
-            let notices = try await APIClient().fetchNotices()
-            testResult = "✅ 연결 성공 — 공지 \(notices.count)건"
+            let notices = try await APIClient().fetchNotices(limit: 1)
+            let base = await EndpointResolver.shared.base()
+            let route = base.contains("ts.net") ? "Tailscale" : "공개 주소"
+            testResult = notices.isEmpty
+                ? "✅ 연결 성공 (\(route)) — 공지가 없습니다"
+                : "✅ 연결 성공 (\(route))"
         } catch {
             testResult = "❌ \(error.localizedDescription)"
         }

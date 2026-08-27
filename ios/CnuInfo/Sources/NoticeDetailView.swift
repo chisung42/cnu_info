@@ -3,7 +3,8 @@ import UIKit
 
 struct NoticeDetailView: View {
     let summary: NoticeSummary
-    var onPostedChanged: (String, Bool) -> Void
+    /// (공지 키, 완료 여부, 인스타그램 permalink)
+    var onPostedChanged: (String, Bool, String) -> Void
 
     @State private var detail: NoticeDetail?
     @State private var previews: [UIImage?] = []
@@ -123,10 +124,14 @@ struct NoticeDetailView: View {
 
             HStack(spacing: 4) {
                 Text(detail.date)
-                if detail.posted {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("업로드 완료").foregroundStyle(.green)
+                if detail.uploadStatus != .notPosted {
+                    Image(systemName: detail.uploadStatus.symbol)
+                        .foregroundStyle(detail.uploadStatus.tint)
+                    Text(detail.uploadStatus.label)
+                        .foregroundStyle(detail.uploadStatus.tint)
+                    if detail.igMatch == "fuzzy" {
+                        Text("(캡션 일부 일치)")
+                    }
                 }
             }
             .font(.caption)
@@ -241,6 +246,19 @@ struct NoticeDetailView: View {
                 }
             }
             .font(.footnote)
+
+            // 인스타그램 대조로 실제 게시물이 확인된 경우에만 링크를 띄운다.
+            if let igURL = URL(string: detail.igPermalink), !detail.igPermalink.isEmpty {
+                Link(destination: igURL) {
+                    Label("인스타그램 게시물 보기", systemImage: "arrow.up.forward.square")
+                        .font(.footnote.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.roundedRectangle(radius: 10))
+                .tint(.green)
+            }
         }
     }
 
@@ -349,7 +367,7 @@ struct NoticeDetailView: View {
         do {
             try await api.markPosted(key: summary.noticeKey, posted: posted)
             detail?.posted = posted
-            onPostedChanged(summary.noticeKey, posted)
+            onPostedChanged(summary.noticeKey, posted, detail?.igPermalink ?? "")
         } catch {
             errorMessage = error.localizedDescription
         }
