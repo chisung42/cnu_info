@@ -22,6 +22,32 @@ final class NoticeFlowUITests: XCTestCase {
         XCTAssertTrue(allChip.exists, "전체 칩이 보여야 한다")
         attach(name: "02-list-chips")
 
+        // 최근 30건 창 → 목록 끝에서 이전 공지를 더 불러온다
+        let loadMore = app.buttons["load-more"]
+        var swipes = 0
+        while !loadMore.isHittable && swipes < 14 {
+            app.swipeUp(velocity: .fast)
+            swipes += 1
+        }
+        XCTAssertTrue(loadMore.isHittable, "목록 끝에 '더 불러오기' 버튼이 있어야 한다")
+        attach(name: "09-load-more")
+        loadMore.tap()
+
+        // 목록이 늘어나면 푸터가 화면 밖으로 밀려 지연 렌더링에서 빠지므로 다시 끝까지 내린다.
+        let grown = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@", "최근 60건")
+        ).firstMatch
+        var extra = 0
+        while !grown.exists && extra < 20 {
+            app.swipeUp(velocity: .fast)
+            extra += 1
+        }
+        XCTAssertTrue(grown.exists, "불러온 뒤 60건으로 늘어나야 한다")
+        swipes += extra
+
+        // 목록 맨 위로 되돌린다
+        for _ in 0..<(swipes + 4) { app.swipeDown(velocity: .fast) }
+
         // 업로드 상태 필터 전환 (인스타 대조 결과로 걸러 보는 기능)
         let filterMenu = app.buttons["filter-menu"]
         XCTAssertTrue(filterMenu.exists, "업로드 상태 필터 버튼이 있어야 한다")
