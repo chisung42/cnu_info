@@ -2239,6 +2239,10 @@ def api_notices():
             continue
         filtered.append(summary)
 
+    # 대시보드는 날짜(일 단위) → 게시판명 순으로 정렬하지만, 앱의 '최근 N건' 창은
+    # 시·분까지 반영한 실제 최신순이어야 한다. 날짜가 비어 있으면 맨 뒤로 보낸다.
+    filtered.sort(key=lambda s: (s.get("date") or s.get("crawled_at") or ""), reverse=True)
+
     total = len(filtered)
     window = filtered[offset : offset + limit] if limit else filtered[offset:]
     return jsonify(
