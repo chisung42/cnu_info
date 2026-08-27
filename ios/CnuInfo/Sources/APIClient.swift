@@ -241,6 +241,20 @@ struct APIClient {
         _ = try await request("/api/notices/\(encoded)/thumbnail", method: "POST", body: body, long: true)
     }
 
+    /// 이미지 순서를 바꾼다. 서버가 파일을 다시 연번하므로 호출 뒤 상세를 새로 받아야 한다.
+    func reorderImages(key: String, order: [String]) async throws {
+        let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
+        let body = try JSONEncoder().encode(["order": order])
+        _ = try await request("/api/notices/\(encoded)/reorder", method: "POST", body: body, long: true)
+    }
+
+    /// 이미지 한 장을 삭제한다. 남은 파일은 다시 연번된다.
+    func deleteImage(key: String, path: String) async throws {
+        let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
+        let body = try JSONEncoder().encode(["image": path])
+        _ = try await request("/api/notices/\(encoded)/delete-image", method: "POST", body: body, long: true)
+    }
+
     /// 공지 이미지를 인스타그램에 바로 게시한다.
     /// dryRun이면 인스타그램이 이미지를 가져올 수 있는지만 확인하고 게시하지 않는다.
     func publishNotice(key: String, dryRun: Bool = false) async throws -> PublishResult {

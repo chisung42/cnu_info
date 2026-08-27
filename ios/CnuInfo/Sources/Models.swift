@@ -65,9 +65,13 @@ struct NoticeSummary: Codable, Identifiable, Hashable {
     }
 }
 
-struct NoticeImage: Codable, Hashable {
+struct NoticeImage: Codable, Hashable, Identifiable {
     let url: String
     let name: String
+    /// 서버에 저장된 상대 경로. 순서 변경·삭제 요청에 그대로 쓴다.
+    let path: String?
+
+    var id: String { path ?? url }
 }
 
 struct NoticeDetail: Codable {

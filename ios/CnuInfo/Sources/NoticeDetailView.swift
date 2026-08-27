@@ -17,6 +17,7 @@ struct NoticeDetailView: View {
     @State private var showRecrawlConfirm = false
     @State private var showPublishConfirm = false
     @State private var publishMessage: String?
+    @State private var showPhotoEditor = false
 
     private let api = APIClient()
 
@@ -57,6 +58,13 @@ struct NoticeDetailView: View {
                 }
                 .accessibilityIdentifier("detail-menu")
                 .disabled(detail == nil || isWorking)
+            }
+        }
+        .sheet(isPresented: $showPhotoEditor) {
+            PhotoEditSheet(noticeKey: summary.noticeKey) {
+                // 순서나 장수가 바뀌었으니 미리보기를 다시 받는다.
+                previews = []
+                Task { await load() }
             }
         }
         .sheet(isPresented: $showThumbnailEditor) {
@@ -174,29 +182,44 @@ struct NoticeDetailView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Button {
+                        showPhotoEditor = true
+                    } label: {
+                        Label("편집", systemImage: "arrow.up.arrow.down")
+                            .font(.subheadline)
+                    }
+                    .disabled(isWorking)
+                    .accessibilityIdentifier("edit-photos")
                 }
-                let columns = [GridItem(.adaptive(minimum: 104), spacing: 3)]
-                LazyVGrid(columns: columns, spacing: 3) {
+                // 원본 비율을 그대로 보여준다. 잘라내면 이미지에 담긴 표·본문이 가려진다.
+                let columns = [GridItem(.adaptive(minimum: 100), spacing: 6)]
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
                     ForEach(previews.indices, id: \.self) { index in
                         Button {
                             viewerIndex = index
                         } label: {
-                            Color.clear
-                                .aspectRatio(1, contentMode: .fit)
-                                .overlay {
-                                    if let image = previews[index] {
-                                        Image(uiImage: image)
-                                            .resizable()
-                                            .scaledToFill()
-                                    } else {
-                                        ZStack {
-                                            Color(.tertiarySystemFill)
-                                            ProgressView()
-                                        }
-                                    }
+                            Group {
+                                if let image = previews[index] {
+                                    Image(uiImage: image)
+                                        .resizable()
+                                        .scaledToFit()
+                                } else {
+                                    Color(.tertiarySystemFill)
+                                        .aspectRatio(4.0 / 5.0, contentMode: .fit)
+                                        .overlay { ProgressView() }
                                 }
-                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                .contentShape(RoundedRectangle(cornerRadius: 4))
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay(alignment: .topLeading) {
+                                Text("\(index + 1)")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(.black.opacity(0.55), in: Capsule())
+                                    .padding(4)
+                            }
+                            .contentShape(RoundedRectangle(cornerRadius: 6))
                         }
                         .buttonStyle(.plain)
                         .disabled(previews[index] == nil)

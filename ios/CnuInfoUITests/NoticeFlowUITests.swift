@@ -123,6 +123,16 @@ final class NoticeFlowUITests: XCTestCase {
         XCTAssertTrue(firstThumb.waitForExistence(timeout: 30), "사진 썸네일이 보여야 한다")
         attach(name: "03-detail")
 
+        // 사진 편집 화면. 실제 순서 변경·삭제는 서버 데이터를 바꾸므로 열고 닫기만 확인한다.
+        let editPhotos = app.buttons["edit-photos"]
+        XCTAssertTrue(editPhotos.exists, "사진 편집 버튼이 있어야 한다")
+        editPhotos.tap()
+        XCTAssertTrue(app.staticTexts["사진 편집"].waitForExistence(timeout: 20), "사진 편집 화면이 열려야 한다")
+        XCTAssertTrue(app.staticTexts["1번째"].waitForExistence(timeout: 20), "이미지 목록이 보여야 한다")
+        XCTAssertTrue(app.staticTexts["표지 (썸네일)"].exists, "첫 이미지가 표지로 표시되어야 한다")
+        attach(name: "11-photo-editor")
+        app.buttons["완료"].tap()
+
         firstThumb.tap()
         let closeButton = app.buttons["photo-viewer-close"]
         XCTAssertTrue(closeButton.waitForExistence(timeout: 10), "전체화면 뷰어가 열려야 한다")
