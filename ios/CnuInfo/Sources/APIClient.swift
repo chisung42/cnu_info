@@ -241,6 +241,20 @@ struct APIClient {
         _ = try await request("/api/notices/\(encoded)/thumbnail", method: "POST", body: body, long: true)
     }
 
+    /// 공지 이미지를 인스타그램에 바로 게시한다.
+    /// dryRun이면 인스타그램이 이미지를 가져올 수 있는지만 확인하고 게시하지 않는다.
+    func publishNotice(key: String, dryRun: Bool = false) async throws -> PublishResult {
+        let encoded = key.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? key
+        let body = try JSONEncoder().encode(["dry_run": dryRun])
+        let data = try await request(
+            "/api/notices/\(encoded)/publish", method: "POST", body: body, long: true
+        )
+        guard let decoded = try? JSONDecoder().decode(PublishResult.self, from: data) else {
+            throw APIError.decoding
+        }
+        return decoded
+    }
+
     /// 인스타그램 연동 상태(토큰 등록 여부)를 확인한다
     func instagramStatus() async throws -> InstagramStatus {
         let data = try await request("/api/instagram/status")

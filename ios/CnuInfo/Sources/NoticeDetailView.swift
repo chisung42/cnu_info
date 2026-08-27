@@ -15,6 +15,8 @@ struct NoticeDetailView: View {
     @State private var viewerIndex: Int?
     @State private var showThumbnailEditor = false
     @State private var showRecrawlConfirm = false
+    @State private var showPublishConfirm = false
+    @State private var publishMessage: String?
 
     private let api = APIClient()
 
@@ -66,6 +68,26 @@ struct NoticeDetailView: View {
                     await applyThumbnail(title: newTitle, date: newDate)
                 }
             }
+        }
+        .confirmationDialog(
+            "인스타그램에 지금 게시할까요?",
+            isPresented: $showPublishConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("게시", role: .destructive) {
+                Task { await publishNow() }
+            }
+            Button("취소", role: .cancel) {}
+        } message: {
+            Text("@cnu_info 계정에 즉시 올라가며 앱에서 되돌릴 수 없습니다. 취소는 인스타그램에서 직접 삭제해야 합니다.")
+        }
+        .alert("인스타그램 게시", isPresented: Binding(
+            get: { publishMessage != nil },
+            set: { if !$0 { publishMessage = nil } }
+        )) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(publishMessage ?? "")
         }
         .confirmationDialog("이 공지를 처음부터 다시 크롤링할까요?", isPresented: $showRecrawlConfirm, titleVisibility: .visible) {
             Button("재크롤링", role: .destructive) {
@@ -206,14 +228,36 @@ struct NoticeDetailView: View {
     private func actionButtons(_ detail: NoticeDetail) -> some View {
         VStack(spacing: 10) {
             Button {
-                Task { await saveAndOpenInstagram(detail) }
+                showPublishConfirm = true
             } label: {
-                Label("저장하고 인스타그램 열기", systemImage: "square.and.arrow.down.on.square")
+                Label("인스타그램에 바로 올리기", systemImage: "paperplane.fill")
                     .font(.body.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 12))
+            .disabled(isWorking || detail.images.isEmpty || detail.uploadStatus == .verified)
+            .accessibilityIdentifier("publish-now")
+
+            if detail.images.count > 10 {
+                Label(
+                    "이미지 \(detail.images.count)장 중 앞 10장만 올라갑니다 (인스타그램 API 제한)",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button {
+                Task { await saveAndOpenInstagram(detail) }
+            } label: {
+                Label("직접 올리기 (저장 + 인스타그램 열기)", systemImage: "square.and.arrow.down.on.square")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.bordered)
             .buttonBorderShape(.roundedRectangle(radius: 12))
             .disabled(isWorking || detail.images.isEmpty)
 
@@ -296,6 +340,24 @@ struct NoticeDetailView: View {
             await load()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func publishNow() async {
+        isWorking = true
+        workStatus = "인스타그램에 게시 중… (이미지 업로드에 시간이 걸립니다)"
+        defer { isWorking = false }
+        do {
+            let result = try await api.publishNotice(key: summary.noticeKey)
+            var lines = ["이미지 \(result.imageCount)장을 게시했습니다."]
+            if result.skippedImages > 0 {
+                lines.append("API 제한으로 \(result.skippedImages)장은 제외됐습니다.")
+            }
+            publishMessage = lines.joined(separator: "\n")
+            await load()
+            onPostedChanged(summary.noticeKey, true, result.permalink ?? "")
+        } catch {
+            publishMessage = "게시 실패: \(error.localizedDescription)"
         }
     }
 

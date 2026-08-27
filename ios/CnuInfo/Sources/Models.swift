@@ -107,6 +107,22 @@ struct NoticeDetail: Codable {
     }
 }
 
+struct PublishResult: Codable {
+    let published: Bool
+    let imageCount: Int
+    let skippedImages: Int
+    let permalink: String?
+    let mediaId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case published
+        case imageCount = "image_count"
+        case skippedImages = "skipped_images"
+        case permalink
+        case mediaId = "media_id"
+    }
+}
+
 struct InstagramStatus: Codable {
     let configured: Bool
     let refreshedAt: String?

@@ -92,8 +92,27 @@ final class NoticeFlowUITests: XCTestCase {
         firstCell.tap()
 
         // 상세 화면의 핵심 버튼 확인
-        let saveButton = app.buttons["저장하고 인스타그램 열기"]
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 30), "상세 화면 저장 버튼이 보여야 한다")
+        let saveButton = app.buttons["직접 올리기 (저장 + 인스타그램 열기)"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 30), "직접 올리기 버튼이 보여야 한다")
+
+        // 자동 게시 버튼은 확인 창까지만 검사한다. 실제로 게시하면 되돌릴 수 없다.
+        let publishNow = app.buttons["publish-now"]
+        if publishNow.exists && publishNow.isEnabled {
+            publishNow.tap()
+            let confirm = app.buttons["게시"]
+            XCTAssertTrue(confirm.waitForExistence(timeout: 5), "게시 확인 창이 떠야 한다")
+            attach(name: "10-publish-confirm")
+            // 팝오버로 뜨면 취소 버튼이 없고 바깥을 탭해 닫는다. '게시'는 절대 누르지 않는다.
+            let dismissRegion = app.otherElements["PopoverDismissRegion"]
+            if dismissRegion.exists {
+                dismissRegion.tap()
+            } else if app.buttons["취소"].exists {
+                app.buttons["취소"].tap()
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)).tap()
+            }
+            XCTAssertFalse(confirm.waitForExistence(timeout: 3), "확인 창이 닫혀야 한다")
+        }
 
         let copyButton = app.buttons["본문 복사"]
         XCTAssertTrue(copyButton.waitForExistence(timeout: 10), "본문 복사 버튼이 보여야 한다")
