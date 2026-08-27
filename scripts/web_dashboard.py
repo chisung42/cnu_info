@@ -214,27 +214,57 @@ def _to_rel(path: str | None) -> str:
         return str(p)
 
 
-def _clear_recrawl_derived_files(attachment_dir: str | None) -> list[str]:
-    """Remove only reproducible outputs before a notice is re-crawled."""
+def _stash_recrawl_derived_files(attachment_dir: str | None) -> tuple[list[str], dict[str, str]]:
+    """재크롤링 전에 재생성 가능한 산출물을 옆으로 치워 둔다.
+
+    지우지 않고 옮기는 이유: 크롤링이 실패하면 이미지가 영구히 사라져 공지에
+    이미지가 하나도 없는 상태가 된다. 실패 시 ``_restore_recrawl_derived_files``로
+    되돌리고, 성공하면 ``_discard_recrawl_stash``로 버린다.
+    """
     if not attachment_dir:
-        return []
+        return [], {}
 
     attachment_path = Path(_to_abs(attachment_dir)).resolve()
     attachments_root = (BASE_PATH / DEFAULT_ATTACHMENTS_DIR).resolve()
     try:
         attachment_path.relative_to(attachments_root)
     except ValueError:
-        return []
+        return [], {}
 
-    # Keep original files, including any manually uploaded attachment.  These
-    # folders are entirely regenerated from source during the crawl.
-    removed: list[str] = []
+    # 원본 파일(직접 올린 첨부 포함)은 건드리지 않는다. 아래 폴더만 크롤링으로 다시 만들어진다.
+    moved: list[str] = []
+    stash: dict[str, str] = {}
     for dirname in ("pdfs", "pngs", "result"):
         target = attachment_path / dirname
         if target.is_dir():
-            shutil.rmtree(target)
-            removed.append(dirname)
-    return removed
+            backup = attachment_path / f".__recrawl_stash_{dirname}"
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            try:
+                os.replace(target, backup)
+            except OSError:
+                continue
+            moved.append(dirname)
+            stash[str(target)] = str(backup)
+    return moved, stash
+
+
+def _restore_recrawl_derived_files(stash: dict[str, str]) -> None:
+    """크롤링이 실패했을 때 치워 둔 산출물을 제자리로 돌린다."""
+    for original, backup in stash.items():
+        if not os.path.isdir(backup):
+            continue
+        if os.path.isdir(original):
+            shutil.rmtree(original, ignore_errors=True)
+        try:
+            os.replace(backup, original)
+        except OSError:
+            pass
+
+
+def _discard_recrawl_stash(stash: dict[str, str]) -> None:
+    for backup in stash.values():
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 def _renumber_result_files(paths: list[str]) -> tuple[list[str], dict[str, str]]:
@@ -1527,6 +1557,16 @@ def recrawl_notice(notice_key: str):
     if not url:
         return jsonify({"success": False, "error": "공지 URL이 없습니다."}), 404
 
+    # 이 공지가 DB dict에서 실제로 어떤 키로 들어 있는지 찾아 둔다.
+    # notice_key와 다른 키에 저장돼 있으면 그대로 쓰다가 항목이 하나 더 생긴다.
+    db_key = str(notice_key)
+    if str(notice_key) not in notices:
+        for candidate_key, candidate in notices.items():
+            if candidate.get("notice_key") == notice_key:
+                db_key = str(candidate_key)
+                break
+
+    derived_stash: dict[str, str] = {}
     try:
         import requests
 
@@ -1540,7 +1580,7 @@ def recrawl_notice(notice_key: str):
         existing_image_result = notice.get("image_result")
         existing_attachment_dir = notice.get("attachment_dir")
         existing_display_content = notice.get("display_content")
-        cleared_derived_dirs = _clear_recrawl_derived_files(existing_attachment_dir)
+        cleared_derived_dirs, derived_stash = _stash_recrawl_derived_files(existing_attachment_dir)
 
         # 재크롤링 실행
         # 기존 attachment_dir이 있으면 그 부모를 base로 사용해 동일한 폴더 구조 유지
@@ -1574,6 +1614,8 @@ def recrawl_notice(notice_key: str):
             session.close()
 
         if not detail:
+            # 산출물을 되돌려 재크롤링 실패가 이미지 유실로 이어지지 않게 한다.
+            _restore_recrawl_derived_files(derived_stash)
             return jsonify({"success": False, "error": "크롤링에 실패했습니다."}), 500
 
         # 재크롤링 결과는 본문/첨부를 갱신하고, 변환된 첨부가 있으면 이미지도 재생성한다.
@@ -1590,35 +1632,75 @@ def recrawl_notice(notice_key: str):
                         _to_abs(detail["attachment_dir"]),
                         max_images=20,
                     )
-                    if isinstance(existing_image_result, dict):
-                        for key in ("thumbnail_title", "thumbnail_date", "thumbnail_text"):
-                            if existing_image_result.get(key):
-                                refreshed_image_result[key] = existing_image_result[key]
                 except Exception:
                     refreshed_image_result = None
+
             if refreshed_image_result:
+                if isinstance(existing_image_result, dict):
+                    override_title = existing_image_result.get("thumbnail_title")
+                    override_date = existing_image_result.get("thumbnail_date")
+                    for key in ("thumbnail_title", "thumbnail_date", "thumbnail_text", "thumbnail_texts"):
+                        if existing_image_result.get(key):
+                            refreshed_image_result[key] = existing_image_result[key]
+                    # 저장된 제목·날짜만 옮기면 01.jpg는 원래 제목으로 다시 만들어져
+                    # 화면의 값과 실제 이미지가 어긋난다. 그 값으로 썸네일을 다시 만든다.
+                    if override_title or override_date:
+                        try:
+                            out_rel = generate_notice_thumbnail_header(
+                                detail,
+                                _to_abs(detail["attachment_dir"]),
+                                title=override_title or None,
+                                date_text=override_date or None,
+                                out_filename="01.jpg",
+                            )
+                            gen = refreshed_image_result.get("generated_images") or []
+                            if out_rel and out_rel not in gen:
+                                refreshed_image_result["generated_images"] = [out_rel] + [
+                                    p for p in gen if isinstance(p, str)
+                                ]
+                        except Exception:
+                            pass
                 detail["image_result"] = refreshed_image_result
-            elif existing_image_result:
-                detail["image_result"] = existing_image_result
+                _discard_recrawl_stash(derived_stash)
+            else:
+                # 이미지를 새로 만들지 못했다. 치워 둔 이전 결과를 되돌려
+                # 이미지가 하나도 없는 공지가 되지 않게 한다.
+                _restore_recrawl_derived_files(derived_stash)
+                cleared_derived_dirs = []
+                if existing_image_result:
+                    detail["image_result"] = existing_image_result
             if existing_display_content:
                 detail["display_content"] = existing_display_content
 
-        # notices_db.json 업데이트
+        # notices_db.json 업데이트.
+        # 항목을 통째로 갈아치우면 크롤러가 모르는 필드가 사라진다. 업로드 완료 표시
+        # (posted/posted_at)와 인스타그램 대조 결과(ig_*)가 그래서 초기화됐다.
+        # 기존 값 위에 크롤링 결과를 덮어쓰는 방식으로 바꾼다.
         db_data = _load_json(NOTICE_DB_PATH)
         if isinstance(db_data, dict):
-            db_data[notice_key] = detail
+            existing_entry = db_data.get(db_key)
+            if isinstance(existing_entry, dict):
+                merged = dict(existing_entry)
+                merged.update(detail)
+                db_data[db_key] = merged
+            else:
+                db_data[db_key] = detail
         elif isinstance(db_data, list):
-            # 리스트 형식인 경우 기존 항목 찾아서 업데이트
+            # 리스트 형식인 경우 기존 항목 찾아서 갱신
             found = False
             for i, item in enumerate(db_data):
+                if not isinstance(item, dict):
+                    continue
                 if item.get("notice_key") == notice_key or item.get("id") == notice_id:
-                    db_data[i] = detail
+                    merged = dict(item)
+                    merged.update(detail)
+                    db_data[i] = merged
                     found = True
                     break
             if not found:
                 db_data.append(detail)
         else:
-            db_data = {notice_key: detail}
+            db_data = {db_key: detail}
 
         with open(NOTICE_DB_PATH, "w", encoding="utf-8") as f:
             json.dump(db_data, f, ensure_ascii=False, indent=2)
@@ -1634,6 +1716,8 @@ def recrawl_notice(notice_key: str):
             }
         })
     except Exception as e:
+        # 예상 못한 실패에서도 이미지가 사라지지 않게 되돌린다.
+        _restore_recrawl_derived_files(derived_stash)
         return jsonify({"success": False, "error": f"오류 발생: {str(e)}"}), 500
 
 
