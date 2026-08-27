@@ -9,6 +9,7 @@ targets:
     platform: iOS
     sources:
       - CnuInfo/Sources
+      - CnuInfo/Resources
     info:
       path: CnuInfo/Info.plist
       properties:

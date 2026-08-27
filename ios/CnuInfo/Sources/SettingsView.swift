@@ -31,7 +31,7 @@ struct SettingsView: View {
                         Text(testResult).font(.footnote)
                     }
                 } footer: {
-                    Text("서버는 Tailscale 망을 통해 접근합니다. iPhone에 Tailscale 앱이 설치되어 있고 연결된 상태여야 합니다.")
+                    Text("기본은 공개 주소(\(AppSettings.publicServerURL))로 접속하고, 연결이 안 되면 Tailscale 주소로 자동 전환됩니다. 공개 주소는 공유기에서 8443 포트포워딩이 필요합니다.")
                 }
             }
             .navigationTitle("설정")
