@@ -52,12 +52,10 @@ struct SettingsView: View {
         defer { isTesting = false }
         await EndpointResolver.shared.invalidate()
         do {
-            let notices = try await APIClient().fetchNotices(limit: 1)
+            let page = try await APIClient().fetchNotices(limit: 1)
             let base = await EndpointResolver.shared.base()
             let route = base.contains("ts.net") ? "Tailscale" : "공개 주소"
-            testResult = notices.isEmpty
-                ? "✅ 연결 성공 (\(route)) — 공지가 없습니다"
-                : "✅ 연결 성공 (\(route))"
+            testResult = "✅ 연결 성공 (\(route)) — 공지 \(page.total)건"
         } catch {
             testResult = "❌ \(error.localizedDescription)"
         }

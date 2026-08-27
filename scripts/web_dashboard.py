@@ -2222,23 +2222,34 @@ def _find_notice(notice_key: str) -> dict | None:
 
 @app.route("/api/notices")
 def api_notices():
+    """최신순 공지 목록. 앱은 limit/offset으로 최근 것부터 조금씩 가져간다."""
     _require_api_key()
     notices = load_notices()
     since = (request.args.get("since") or "").strip()
     unposted_only = request.args.get("unposted") in ("1", "true", "yes")
     limit = request.args.get("limit", type=int) or 0
+    offset = max(0, request.args.get("offset", type=int) or 0)
 
-    items = []
+    filtered = []
     for notice in notices:
         summary = _api_notice_summary(notice)
         if since and (summary["crawled_at"] or "") <= since:
             continue
         if unposted_only and summary["posted"]:
             continue
-        items.append(summary)
-        if limit and len(items) >= limit:
-            break
-    return jsonify({"success": True, "count": len(items), "notices": items})
+        filtered.append(summary)
+
+    total = len(filtered)
+    window = filtered[offset : offset + limit] if limit else filtered[offset:]
+    return jsonify(
+        {
+            "success": True,
+            "count": len(window),
+            "total": total,
+            "offset": offset,
+            "notices": window,
+        }
+    )
 
 
 @app.route("/api/notices/<path:notice_key>")

@@ -20,7 +20,12 @@ enum UploadFilter: String, CaseIterable, Identifiable {
 }
 
 struct NoticeListView: View {
+    /// 한 번에 가져오는 공지 수. 새 공지가 쌓이면 오래된 것은 이 창 밖으로 밀려난다.
+    private static let pageSize = 30
+
     @State private var notices: [NoticeSummary] = []
+    @State private var totalOnServer = 0
+    @State private var isLoadingMore = false
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var uploadFilter: UploadFilter = .notPosted
@@ -113,11 +118,14 @@ struct NoticeListView: View {
                     systemImage: uploadFilter == .notPosted ? "checkmark.circle" : "tray"
                 )
             } else {
-                List(visibleNotices) { notice in
-                    NavigationLink(value: notice) {
-                        NoticeRow(notice: notice)
+                List {
+                    ForEach(visibleNotices) { notice in
+                        NavigationLink(value: notice) {
+                            NoticeRow(notice: notice)
+                        }
+                        .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 12))
                     }
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 12))
+                    windowFooter
                 }
                 .listStyle(.insetGrouped)
                 .animation(.snappy, value: selectedBoard)
@@ -129,6 +137,41 @@ struct NoticeListView: View {
             if isLoading && notices.isEmpty {
                 ProgressView()
             }
+        }
+    }
+
+    private var canLoadMore: Bool {
+        totalOnServer > notices.count
+    }
+
+    /// 지금 몇 건을 보고 있는지 알려주고, 원하면 과거 공지를 더 불러온다.
+    @ViewBuilder
+    private var windowFooter: some View {
+        Section {
+            if canLoadMore {
+                Button {
+                    Task { await loadMore() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isLoadingMore {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "arrow.down.circle")
+                        }
+                        Text("이전 공지 \(Self.pageSize)건 더 불러오기")
+                    }
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                }
+                .disabled(isLoadingMore)
+                .accessibilityIdentifier("load-more")
+            }
+        } footer: {
+            Text(canLoadMore
+                ? "최근 \(notices.count)건 표시 중 · 서버에 전체 \(totalOnServer)건"
+                : "전체 \(notices.count)건을 모두 불러왔습니다")
+                .font(.caption2)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -220,16 +263,34 @@ struct NoticeListView: View {
 
     // MARK: - 동작
 
+    /// 최근 30건으로 창을 초기화한다. 새 공지가 있으면 그만큼 오래된 것이 창에서 빠진다.
     private func load() async {
         guard !AppSettings.apiKey.isEmpty else { return }
         isLoading = true
         errorMessage = nil
         do {
-            notices = try await api.fetchNotices(limit: 150)
+            let page = try await api.fetchNotices(limit: Self.pageSize, offset: 0)
+            notices = page.notices
+            totalOnServer = page.total
         } catch {
             errorMessage = error.localizedDescription
         }
         isLoading = false
+    }
+
+    /// 창 뒤쪽(더 오래된 공지)을 한 페이지 더 붙인다.
+    private func loadMore() async {
+        guard !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let page = try await api.fetchNotices(limit: Self.pageSize, offset: notices.count)
+            let known = Set(notices.map(\.noticeKey))
+            notices.append(contentsOf: page.notices.filter { !known.contains($0.noticeKey) })
+            totalOnServer = page.total
+        } catch {
+            noticeMessage = NoticeMessage(title: "더 불러오기 실패", body: error.localizedDescription)
+        }
     }
 
     private func applyDetailChange(key: String, posted: Bool, permalink: String) {

@@ -161,13 +161,17 @@ struct APIClient {
         return data
     }
 
-    func fetchNotices(limit: Int? = nil) async throws -> [NoticeSummary] {
-        let path = limit.map { "/api/notices?limit=\($0)" } ?? "/api/notices"
+    /// 최신순 공지를 limit/offset으로 가져온다. total은 서버가 가진 전체 개수다.
+    func fetchNotices(limit: Int? = nil, offset: Int = 0) async throws -> (notices: [NoticeSummary], total: Int) {
+        var items: [String] = []
+        if let limit { items.append("limit=\(limit)") }
+        if offset > 0 { items.append("offset=\(offset)") }
+        let path = items.isEmpty ? "/api/notices" : "/api/notices?" + items.joined(separator: "&")
         let data = try await request(path)
         guard let decoded = try? JSONDecoder().decode(NoticeListResponse.self, from: data) else {
             throw APIError.decoding
         }
-        return decoded.notices
+        return (decoded.notices, decoded.total ?? decoded.notices.count)
     }
 
     func fetchDetail(key: String) async throws -> NoticeDetail {

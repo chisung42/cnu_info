@@ -141,6 +141,8 @@ struct InstagramSyncResult: Codable {
 struct NoticeListResponse: Codable {
     let success: Bool
     let count: Int
+    /// 서버가 가진 전체 공지 수. 앱은 이 중 최근 일부만 표시한다.
+    let total: Int?
     let notices: [NoticeSummary]
 }
 
