@@ -2317,6 +2317,19 @@ def api_mark_posted(notice_key: str):
     return jsonify({"success": True, "posted": posted})
 
 
+@app.route("/api/console/<operation>")
+def api_console(operation: str):
+    """크롤러/웹 서비스의 상태와 최근 로그를 앱 콘솔 화면에 제공한다.
+
+    임의 명령 실행이 아니라 ADMIN_OPERATION_COMMANDS의 조회성 작업만 허용한다.
+    """
+    _require_api_key()
+    if operation not in ("status", "logs"):
+        return jsonify({"success": False, "error": "허용되지 않은 작업입니다."}), 403
+    success, output = _run_admin_operation(operation)
+    return jsonify({"success": success, "output": output}), (200 if success else 500)
+
+
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh_crawler():
     """크롤러(monitor)에 즉시 수집 신호를 보낸다 — 텔레그램 /r과 동일."""
