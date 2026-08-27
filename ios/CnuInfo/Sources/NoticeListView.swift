@@ -175,7 +175,7 @@ struct NoticeListView: View {
         isLoading = true
         errorMessage = nil
         do {
-            notices = try await api.fetchNotices()
+            notices = try await api.fetchNotices(limit: 150)
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -6,7 +6,7 @@ struct NoticeDetailView: View {
     var onPostedChanged: (String, Bool) -> Void
 
     @State private var detail: NoticeDetail?
-    @State private var previews: [UIImage] = []
+    @State private var previews: [UIImage?] = []
     @State private var errorMessage: String?
     @State private var isWorking = false
     @State private var workStatus = ""
@@ -93,7 +93,11 @@ struct NoticeDetailView: View {
             }
         }
         .fullScreenCover(item: $viewerIndex) { index in
-            PhotoViewer(images: previews, startIndex: index)
+            PhotoViewer(
+                thumbs: previews,
+                imageURLs: detail?.images.map(\.url) ?? [],
+                startIndex: index
+            )
         }
     }
 
@@ -144,29 +148,32 @@ struct NoticeDetailView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
-                if previews.isEmpty {
-                    ProgressView("이미지 불러오는 중…")
-                        .frame(maxWidth: .infinity, minHeight: 140)
-                } else {
-                    let columns = [GridItem(.adaptive(minimum: 104), spacing: 3)]
-                    LazyVGrid(columns: columns, spacing: 3) {
-                        ForEach(Array(previews.enumerated()), id: \.offset) { index, image in
-                            Button {
-                                viewerIndex = index
-                            } label: {
-                                Color.clear
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .overlay(
+                let columns = [GridItem(.adaptive(minimum: 104), spacing: 3)]
+                LazyVGrid(columns: columns, spacing: 3) {
+                    ForEach(previews.indices, id: \.self) { index in
+                        Button {
+                            viewerIndex = index
+                        } label: {
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                                .overlay {
+                                    if let image = previews[index] {
                                         Image(uiImage: image)
                                             .resizable()
                                             .scaledToFill()
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                                    .contentShape(RoundedRectangle(cornerRadius: 4))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("photo-thumb-\(index)")
+                                    } else {
+                                        ZStack {
+                                            Color(.tertiarySystemFill)
+                                            ProgressView()
+                                        }
+                                    }
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .contentShape(RoundedRectangle(cornerRadius: 4))
                         }
+                        .buttonStyle(.plain)
+                        .disabled(previews[index] == nil)
+                        .accessibilityIdentifier("photo-thumb-\(index)")
                     }
                 }
             }
@@ -243,12 +250,17 @@ struct NoticeDetailView: View {
         do {
             let d = try await api.fetchDetail(key: summary.noticeKey)
             detail = d
-            var loaded: [UIImage] = []
-            for image in d.images {
-                if let data = try? await api.downloadImage(path: image.url),
-                   let ui = UIImage(data: data) {
-                    loaded.append(ui)
-                    previews = loaded
+            previews = Array(repeating: nil, count: d.images.count)
+            // 썸네일(320px)을 병렬로 받아 도착한 순서대로 채운다
+            await withTaskGroup(of: (Int, UIImage?).self) { group in
+                for (index, image) in d.images.enumerated() {
+                    group.addTask { [api] in
+                        let data = try? await api.downloadThumbnail(path: image.url)
+                        return (index, data.flatMap(UIImage.init(data:)))
+                    }
+                }
+                for await (index, image) in group where index < previews.count {
+                    previews[index] = image
                 }
             }
         } catch {
@@ -287,10 +299,19 @@ struct NoticeDetailView: View {
         defer { isWorking = false }
         do {
             workStatus = "이미지 다운로드 중…"
-            var datas: [Data] = []
-            for image in detail.images {
-                datas.append(try await api.downloadImage(path: image.url))
+            // 원본 화질을 병렬로 받아 원래 순서대로 정렬
+            var indexed: [(Int, Data)] = []
+            try await withThrowingTaskGroup(of: (Int, Data).self) { group in
+                for (index, image) in detail.images.enumerated() {
+                    group.addTask { [api] in
+                        (index, try await api.downloadImage(path: image.url))
+                    }
+                }
+                for try await item in group {
+                    indexed.append(item)
+                }
             }
+            let datas = indexed.sorted { $0.0 < $1.0 }.map(\.1)
 
             workStatus = "사진 앱에 저장 중…"
             let lastId = try await PhotoSaver.saveImages(datas)
@@ -387,22 +408,33 @@ private struct ThumbnailEditorSheet: View {
 // MARK: - 전체화면 사진 뷰어
 
 private struct PhotoViewer: View {
-    let images: [UIImage]
+    let thumbs: [UIImage?]
+    let imageURLs: [String]
     let startIndex: Int
 
     @Environment(\.dismiss) private var dismiss
     @State private var index: Int = 0
+    @State private var fullImages: [Int: UIImage] = [:]
+
+    private let api = APIClient()
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             TabView(selection: $index) {
-                ForEach(Array(images.enumerated()), id: \.offset) { i, image in
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .tag(i)
+                ForEach(imageURLs.indices, id: \.self) { i in
+                    Group {
+                        if let full = fullImages[i] {
+                            Image(uiImage: full).resizable().scaledToFit()
+                        } else if let thumb = thumbs.indices.contains(i) ? thumbs[i] : nil {
+                            // 원본 로드 전에는 썸네일을 먼저 보여준다
+                            Image(uiImage: thumb).resizable().scaledToFit()
+                        } else {
+                            ProgressView().tint(.white)
+                        }
+                    }
+                    .tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
@@ -420,7 +452,7 @@ private struct PhotoViewer: View {
                     }
                     .accessibilityIdentifier("photo-viewer-close")
                     Spacer()
-                    Text("\(index + 1) / \(images.count)")
+                    Text("\(index + 1) / \(imageURLs.count)")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
@@ -431,7 +463,22 @@ private struct PhotoViewer: View {
                 Spacer()
             }
         }
-        .onAppear { index = startIndex }
+        .onAppear {
+            index = startIndex
+            Task { await loadFull(startIndex) }
+        }
+        .onChange(of: index) { _, newIndex in
+            Task { await loadFull(newIndex) }
+        }
         .statusBarHidden()
+    }
+
+    /// 현재 보고 있는 페이지의 원본 화질만 내려받는다
+    private func loadFull(_ i: Int) async {
+        guard imageURLs.indices.contains(i), fullImages[i] == nil else { return }
+        if let data = try? await api.downloadImage(path: imageURLs[i]),
+           let image = UIImage(data: data) {
+            fullImages[i] = image
+        }
     }
 }

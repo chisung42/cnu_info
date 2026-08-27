@@ -45,8 +45,9 @@ struct APIClient {
         return data
     }
 
-    func fetchNotices() async throws -> [NoticeSummary] {
-        let data = try await request("/api/notices")
+    func fetchNotices(limit: Int? = nil) async throws -> [NoticeSummary] {
+        let path = limit.map { "/api/notices?limit=\($0)" } ?? "/api/notices"
+        let data = try await request(path)
         guard let decoded = try? JSONDecoder().decode(NoticeListResponse.self, from: data) else {
             throw APIError.decoding
         }
@@ -62,8 +63,25 @@ struct APIClient {
         return decoded.notice
     }
 
+    /// 이미지 데이터 메모리 캐시 — 같은 공지를 다시 열 때 재다운로드를 막는다
+    private static let imageCache: NSCache<NSString, NSData> = {
+        let cache = NSCache<NSString, NSData>()
+        cache.totalCostLimit = 100 * 1024 * 1024
+        return cache
+    }()
+
     func downloadImage(path: String) async throws -> Data {
-        try await request(path)
+        if let hit = Self.imageCache.object(forKey: path as NSString) {
+            return hit as Data
+        }
+        let data = try await request(path)
+        Self.imageCache.setObject(data as NSData, forKey: path as NSString, cost: data.count)
+        return data
+    }
+
+    /// 그리드용 축소 썸네일 (서버가 320px로 리사이즈해 응답)
+    func downloadThumbnail(path: String) async throws -> Data {
+        try await downloadImage(path: path + "&w=320")
     }
 
     func markPosted(key: String, posted: Bool) async throws {
