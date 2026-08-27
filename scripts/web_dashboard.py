@@ -51,6 +51,16 @@ except Exception:
     instagram_sync = None
     INSTAGRAM_SYNC_AVAILABLE = False
 
+try:
+    try:
+        from scripts import instagram_publish
+    except ImportError:
+        import instagram_publish
+    INSTAGRAM_PUBLISH_AVAILABLE = True
+except Exception:
+    instagram_publish = None
+    INSTAGRAM_PUBLISH_AVAILABLE = False
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_PATH = SCRIPT_DIR.parent
 BASE_DIR = str(BASE_PATH)
@@ -2519,6 +2529,142 @@ def api_instagram_sync():
     }
     instagram_sync.save_sync_summary(DATA_DIR, summary)
     return jsonify({"success": True, **summary})
+
+
+@app.route("/pub/media/<int:expires>/<signature>/<path:rel_path>")
+def public_media(expires: int, signature: str, rel_path: str):
+    """인스타그램이 이미지를 가져갈 수 있게 하는 서명된 임시 공개 경로.
+
+    API 키 없이 열리므로 서명과 만료 시각을 반드시 검사한다. 게시 시점에만 필요하다.
+    """
+    if not INSTAGRAM_PUBLISH_AVAILABLE:
+        abort(404)
+    try:
+        valid = instagram_publish.verify_signature(rel_path, expires, signature)
+    except Exception:
+        valid = False
+    if not valid:
+        abort(403)
+
+    safe_path = _to_abs(rel_path)
+    if os.path.commonpath([str(BASE_PATH), safe_path]) != str(BASE_PATH):
+        abort(403)
+    if not os.path.exists(safe_path):
+        abort(404)
+    return send_file(safe_path)
+
+
+def _update_notice_fields(notice_key: str, fields: dict) -> bool:
+    """notices_db.json에서 해당 공지에 값을 써 넣는다."""
+    db_data = _load_json(NOTICE_DB_PATH)
+    if not isinstance(db_data, (dict, list)):
+        return False
+    updated = False
+    for key, entry in _iter_db_entries(db_data):
+        if key == str(notice_key):
+            entry.update(fields)
+            updated = True
+            break
+    if not updated:
+        return False
+    try:
+        with open(NOTICE_DB_PATH, "w", encoding="utf-8") as fh:
+            json.dump(db_data, fh, ensure_ascii=False, indent=2)
+    except Exception:
+        return False
+    return True
+
+
+@app.route("/api/notices/<path:notice_key>/publish", methods=["POST"])
+def api_publish_notice(notice_key: str):
+    """공지 이미지를 인스타그램에 바로 게시한다.
+
+    dry_run이면 인스타그램이 이미지를 가져올 수 있는지까지만 확인하고 게시하지 않는다.
+    """
+    _require_api_key()
+    if not (INSTAGRAM_PUBLISH_AVAILABLE and INSTAGRAM_SYNC_AVAILABLE):
+        return jsonify({"success": False, "error": "인스타그램 모듈을 사용할 수 없습니다."}), 500
+
+    payload = request.get_json(silent=True) or {}
+    dry_run = bool(payload.get("dry_run"))
+    force = bool(payload.get("force"))
+
+    notice = _find_notice(notice_key)
+    if not notice:
+        return jsonify({"success": False, "error": "공지를 찾을 수 없습니다."}), 404
+
+    if notice.get("ig_permalink") and not force and not dry_run:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "이미 인스타그램에 올라간 공지입니다.",
+                    "permalink": notice.get("ig_permalink"),
+                }
+            ),
+            409,
+        )
+
+    generated = (notice.get("image_result") or {}).get("generated_images") or []
+    image_urls = []
+    for img_path in generated:
+        if not img_path:
+            continue
+        abs_path = _to_abs(img_path)
+        # 인스타그램은 JPEG만 받는다.
+        if not abs_path.lower().endswith((".jpg", ".jpeg")):
+            continue
+        if not os.path.exists(abs_path):
+            continue
+        image_urls.append(instagram_publish.signed_media_url(_to_rel(abs_path)))
+
+    if not image_urls:
+        return jsonify({"success": False, "error": "게시할 JPEG 이미지가 없습니다."}), 400
+
+    board_id = notice.get("board_id") or "default"
+    caption = make_display_content(board_id, notice.get("content") or "")
+
+    try:
+        token = instagram_sync.refresh_token_if_needed(DATA_DIR)
+        result = instagram_publish.publish_images(
+            token, image_urls, caption, dry_run=dry_run
+        )
+    except instagram_sync.InstagramNotConfigured as exc:
+        return jsonify({"success": False, "configured": False, "error": str(exc)}), 409
+    except instagram_publish.InstagramPublishError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 502
+
+    if result.get("published"):
+        now = datetime.now().isoformat(timespec="seconds")
+        _update_notice_fields(
+            str(notice.get("notice_key") or notice_key),
+            {
+                "posted": True,
+                "posted_at": result.get("timestamp") or now,
+                "ig_media_id": result.get("media_id") or "",
+                "ig_permalink": result.get("permalink") or "",
+                "ig_timestamp": result.get("timestamp") or "",
+                "ig_match": "published",
+                "ig_checked_at": now,
+            },
+        )
+
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/instagram/quota")
+def api_instagram_quota():
+    _require_api_key()
+    if not (INSTAGRAM_PUBLISH_AVAILABLE and INSTAGRAM_SYNC_AVAILABLE):
+        return jsonify({"success": False, "error": "인스타그램 모듈을 사용할 수 없습니다."}), 500
+    try:
+        token = instagram_sync.refresh_token_if_needed(DATA_DIR)
+        quota = instagram_publish.publishing_quota(token)
+    except instagram_sync.InstagramNotConfigured as exc:
+        return jsonify({"success": False, "configured": False, "error": str(exc)}), 409
+    except instagram_publish.InstagramPublishError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 502
+    return jsonify({"success": True, **quota})
 
 
 def main() -> None:
