@@ -2289,6 +2289,8 @@ def api_notice_detail(notice_key: str):
             {
                 "url": f"/api/media/{_to_rel(abs_path)}?v={v}",
                 "name": os.path.basename(abs_path),
+                # 순서 변경·삭제 요청에 그대로 쓰는 저장된 상대 경로
+                "path": img_path,
             }
         )
 
@@ -2416,6 +2418,23 @@ def api_update_thumbnail(notice_key: str):
     """JSON {title, date}로 썸네일(01.jpg) 제목/날짜를 바꿔 재생성한다."""
     _require_api_key()
     return update_thumbnail_header(notice_key)
+
+
+@app.route("/api/notices/<path:notice_key>/reorder", methods=["POST"])
+def api_reorder_images(notice_key: str):
+    """JSON {order: [상대경로, ...]}로 이미지 순서를 바꾼다.
+
+    서버가 파일을 01,02,… 로 다시 연번하므로 호출 뒤에는 상세를 새로 받아야 한다.
+    """
+    _require_api_key()
+    return reorder_images(notice_key)
+
+
+@app.route("/api/notices/<path:notice_key>/delete-image", methods=["POST"])
+def api_delete_image(notice_key: str):
+    """JSON {image: 상대경로}로 이미지 한 장을 삭제한다. 남은 파일은 다시 연번된다."""
+    _require_api_key()
+    return delete_image(notice_key)
 
 
 def _iter_db_entries(db_data: Any):
