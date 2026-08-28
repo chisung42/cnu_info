@@ -35,6 +35,9 @@ struct NoticeListView: View {
     @State private var isRefreshingCrawler = false
     @State private var isSyncingInstagram = false
     @State private var noticeMessage: NoticeMessage?
+    @State private var path: [NoticeSummary] = []
+
+    @EnvironmentObject private var push: PushManager
 
     private let api = APIClient()
 
@@ -62,7 +65,7 @@ struct NoticeListView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content
                 .navigationTitle("CNU Info")
                 .navigationDestination(for: NoticeSummary.self) { notice in
@@ -73,6 +76,10 @@ struct NoticeListView: View {
                 .toolbar { toolbarContent }
                 .refreshable { await load() }
                 .task { await load() }
+                .onChange(of: push.pendingNoticeKey) { _, key in
+                    guard let key, !key.isEmpty else { return }
+                    Task { await openFromPush(key) }
+                }
                 .sheet(isPresented: $showSettings, onDismiss: { Task { await load() } }) {
                     SettingsView()
                 }
@@ -290,6 +297,20 @@ struct NoticeListView: View {
             totalOnServer = page.total
         } catch {
             noticeMessage = NoticeMessage(title: "더 불러오기 실패", body: error.localizedDescription)
+        }
+    }
+
+    /// 푸시 알림을 탭했을 때 그 공지 상세로 바로 이동한다.
+    private func openFromPush(_ key: String) async {
+        defer { push.pendingNoticeKey = nil }
+        if let match = notices.first(where: { $0.noticeKey == key }) {
+            path = [match]
+            return
+        }
+        // 방금 수집된 공지라 아직 목록에 없으면 새로 불러온 뒤 찾는다.
+        await load()
+        if let match = notices.first(where: { $0.noticeKey == key }) {
+            path = [match]
         }
     }
 

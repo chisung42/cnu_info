@@ -61,6 +61,16 @@ except Exception:
     instagram_publish = None
     INSTAGRAM_PUBLISH_AVAILABLE = False
 
+try:
+    try:
+        from scripts import push_notify
+    except ImportError:
+        import push_notify
+    PUSH_AVAILABLE = True
+except Exception:
+    push_notify = None
+    PUSH_AVAILABLE = False
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASE_PATH = SCRIPT_DIR.parent
 BASE_DIR = str(BASE_PATH)
@@ -2759,6 +2769,69 @@ def api_publish_notice(notice_key: str):
             },
         )
 
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/push/register", methods=["POST"])
+def api_push_register():
+    """앱이 받은 APNs 기기 토큰을 등록한다."""
+    _require_api_key()
+    if not PUSH_AVAILABLE:
+        return jsonify({"success": False, "error": "푸시 모듈을 사용할 수 없습니다."}), 500
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = push_notify.register_device(
+            DATA_DIR,
+            payload.get("token") or "",
+            (payload.get("environment") or "sandbox"),
+        )
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    return jsonify({"success": True, "configured": push_notify.is_configured(), **result})
+
+
+@app.route("/api/push/unregister", methods=["POST"])
+def api_push_unregister():
+    _require_api_key()
+    if not PUSH_AVAILABLE:
+        return jsonify({"success": False, "error": "푸시 모듈을 사용할 수 없습니다."}), 500
+    payload = request.get_json(silent=True) or {}
+    removed = push_notify.unregister_device(DATA_DIR, payload.get("token") or "")
+    return jsonify({"success": True, "removed": removed})
+
+
+@app.route("/api/push/status")
+def api_push_status():
+    _require_api_key()
+    if not PUSH_AVAILABLE:
+        return jsonify({"success": False, "configured": False, "error": "푸시 모듈을 사용할 수 없습니다."}), 500
+    state = push_notify.load_state(DATA_DIR)
+    return jsonify(
+        {
+            "success": True,
+            "configured": push_notify.is_configured(),
+            "devices": len(state.get("devices") or {}),
+        }
+    )
+
+
+@app.route("/api/push/test", methods=["POST"])
+def api_push_test():
+    """등록된 기기에 시험 알림을 보낸다."""
+    _require_api_key()
+    if not PUSH_AVAILABLE:
+        return jsonify({"success": False, "error": "푸시 모듈을 사용할 수 없습니다."}), 500
+    try:
+        result = push_notify.send_to_devices(
+            DATA_DIR,
+            "CNU Info",
+            "푸시 알림이 정상 동작합니다.",
+            payload_extra={"test": True},
+        )
+    except push_notify.PushNotConfigured as exc:
+        return jsonify({"success": False, "configured": False, "error": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 502
     return jsonify({"success": True, **result})
 
 

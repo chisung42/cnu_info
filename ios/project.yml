@@ -20,6 +20,10 @@ targets:
           - instagram
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+    entitlements:
+      path: CnuInfo/CnuInfo.entitlements
+      properties:
+        aps-environment: development
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: kr.moonhome.cnuinfo

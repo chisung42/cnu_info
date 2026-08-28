@@ -2,10 +2,35 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var push: PushManager
     @AppStorage("serverURL") private var serverURL = ""
     @AppStorage("apiKey") private var apiKey = ""
     @State private var testResult: String?
     @State private var isTesting = false
+    @State private var isPushTesting = false
+    @State private var pushResult: String?
+
+    private var pushStatusText: String {
+        switch push.authorization {
+        case .authorized: return "허용됨"
+        case .denied: return "거부됨 (iOS 설정에서 변경)"
+        case .provisional: return "임시 허용"
+        default: return "아직 요청 안 함"
+        }
+    }
+
+    private func sendTestPush() async {
+        isPushTesting = true
+        defer { isPushTesting = false }
+        do {
+            let sent = try await APIClient().sendTestPush()
+            pushResult = sent > 0
+                ? "✅ \(sent)대에 보냈습니다"
+                : "등록된 기기가 없습니다. 알림을 허용하고 앱을 다시 실행하세요."
+        } catch {
+            pushResult = "❌ \(error.localizedDescription)"
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -17,6 +42,33 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                     SecureField("API 키", text: $apiKey)
                 }
+                Section("푸시 알림") {
+                    HStack {
+                        Text("권한")
+                        Spacer()
+                        Text(pushStatusText)
+                            .foregroundStyle(.secondary)
+                    }
+                    if push.authorization != .authorized {
+                        Button("알림 허용하기") {
+                            Task { _ = await push.requestAuthorization() }
+                        }
+                    }
+                    Button {
+                        Task { await sendTestPush() }
+                    } label: {
+                        if isPushTesting {
+                            ProgressView()
+                        } else {
+                            Text("시험 알림 보내기")
+                        }
+                    }
+                    .disabled(isPushTesting)
+                    if let pushResult {
+                        Text(pushResult).font(.footnote)
+                    }
+                }
+
                 Section {
                     Button {
                         Task { await testConnection() }

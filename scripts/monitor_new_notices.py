@@ -36,6 +36,16 @@ if str(BASE_PATH) not in sys.path:
 # The server's ignored .env file keeps notification credentials out of Git.
 load_dotenv(BASE_PATH / ".env")
 
+try:
+    try:
+        from scripts import push_notify
+    except ImportError:
+        import push_notify
+    PUSH_AVAILABLE = True
+except Exception:
+    push_notify = None
+    PUSH_AVAILABLE = False
+
 
 def _to_abs(path: str | None) -> str:
     if not path:
@@ -686,6 +696,21 @@ def monitor(
                         # Notification errors must not make the notice pending
                         # again, otherwise a temporary Telegram outage can spam.
                         print(f"[텔레그램 경고] 전송 실패 ({key}): {telegram_result}")
+
+                    # iOS 앱 푸시 알림. 설정이나 전송이 실패해도 수집은 계속한다.
+                    if PUSH_AVAILABLE:
+                        try:
+                            push_result = push_notify.notify_new_notice(
+                                str(DATA_DIR), detail, board_name
+                            )
+                            if push_result.get("sent"):
+                                print(f"[푸시] {push_result['sent']}대 전송: {key}")
+                            elif push_result.get("failed"):
+                                print(f"[푸시 경고] 전송 실패 ({key}): {push_result.get('errors')}")
+                        except push_notify.PushNotConfigured:
+                            pass
+                        except Exception as exc:
+                            print(f"[푸시 경고] {exc}")
 
     try:
         while not should_quit.is_set():

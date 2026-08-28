@@ -41,6 +41,7 @@ enum APIError: LocalizedError {
     case server(Int)
     case decoding
     case instagramNotConfigured
+    case pushNotConfigured
 
     var errorDescription: String? {
         switch self {
@@ -50,6 +51,8 @@ enum APIError: LocalizedError {
         case .decoding: return "서버 응답을 해석할 수 없습니다."
         case .instagramNotConfigured:
             return "인스타그램 연동이 설정되지 않았습니다. 서버에 액세스 토큰을 등록해야 합니다."
+        case .pushNotConfigured:
+            return "푸시 알림이 설정되지 않았습니다. 서버에 APNs 인증 키를 등록해야 합니다."
         }
     }
 }
@@ -267,6 +270,26 @@ struct APIClient {
             throw APIError.decoding
         }
         return decoded
+    }
+
+    /// APNs 기기 토큰을 서버에 등록한다
+    func registerPushToken(_ token: String, environment: String) async throws {
+        let body = try JSONEncoder().encode(["token": token, "environment": environment])
+        _ = try await request("/api/push/register", method: "POST", body: body)
+    }
+
+    /// 등록된 기기에 시험 알림을 보낸다
+    func sendTestPush() async throws -> Int {
+        struct TestResult: Codable { let sent: Int }
+        do {
+            let data = try await request("/api/push/test", method: "POST", long: true)
+            guard let decoded = try? JSONDecoder().decode(TestResult.self, from: data) else {
+                throw APIError.decoding
+            }
+            return decoded.sent
+        } catch APIError.server(409) {
+            throw APIError.pushNotConfigured
+        }
     }
 
     /// 인스타그램 연동 상태(토큰 등록 여부)를 확인한다
