@@ -148,3 +148,78 @@ curl -s -X POST -H "X-API-Key: $(cat .app_api_key)" \
 ```
 
 남은 게시 한도는 `GET /api/instagram/quota`로 확인한다.
+
+---
+
+# 푸시 알림 설정 (APNs)
+
+새 공지가 수집되면 iOS 앱으로 푸시 알림이 오고, 알림을 탭하면 그 공지 상세가 바로 열린다.
+텔레그램 알림과 별개로 동작하며, **APNs 인증 키를 등록하기 전까지는 조용히 비활성**이다.
+
+## 준비 (한 번만, 약 10분)
+
+### 1. APNs 인증 키(.p8) 발급
+
+1. https://developer.apple.com/account/resources/authkeys/list → `+`
+2. 이름은 아무거나(예: `CNU Info Push`), **Apple Push Notifications service (APNs)** 체크
+3. `Continue` → `Register` → **Download** (`AuthKey_XXXXXXXXXX.p8`)
+   - **한 번만 내려받을 수 있다.** 잃어버리면 키를 새로 만들어야 한다.
+4. 화면의 **Key ID**(10자)를 적어 둔다. Team ID는 `54J7TC5NH2`다.
+
+### 2. 앱에 푸시 기능 켜기
+
+Xcode에서 `CnuInfo` 타깃 → `Signing & Capabilities` → `+ Capability` → **Push Notifications**.
+자동 서명이면 Xcode가 App ID(`kr.moonhome.cnuinfo`)에 푸시를 등록해 준다.
+(저장소에 `ios/CnuInfo/CnuInfo.entitlements`가 이미 들어 있어 `xcodegen generate`만 해도 붙는다.)
+
+### 3. 서버에 키 등록
+
+```bash
+# .p8 파일을 서버로 복사
+scp -P 2222 ~/Downloads/AuthKey_XXXXXXXXXX.p8 moon@moonhome.kro.kr:/srv/cnuinfo/secrets/
+ssh moon@moonhome.kro.kr -p 2222
+chmod 600 /srv/cnuinfo/secrets/AuthKey_*.p8
+
+cat >> /srv/cnuinfo/.env <<'EOF'
+APNS_KEY_PATH=/srv/cnuinfo/secrets/AuthKey_XXXXXXXXXX.p8
+APNS_KEY_ID=XXXXXXXXXX
+APNS_TEAM_ID=54J7TC5NH2
+APNS_BUNDLE_ID=kr.moonhome.cnuinfo
+EOF
+sudo systemctl restart cnu-info-web cnu-info-monitor
+```
+
+확인:
+
+```bash
+curl -s -H "X-API-Key: $(cat .app_api_key)" \
+  https://moon-p151emx.tail70d104.ts.net/api/push/status | python3 -m json.tool
+# → "configured": true
+```
+
+### 4. 앱에서 알림 허용
+
+앱 `⋯ > 설정 > 푸시 알림`에서 `알림 허용하기` → iOS 권한 창에서 허용.
+허용하면 기기 토큰이 서버에 자동 등록된다(`devices`가 1 이상이 된다).
+`시험 알림 보내기`로 바로 확인할 수 있다.
+
+## 개발 빌드와 배포 빌드
+
+APNs는 두 환경이 나뉘어 있고 토큰도 서로 다르다. 앱이 알아서 구분해 서버에 알린다.
+
+| 빌드 | 환경 | APNs 서버 |
+| --- | --- | --- |
+| Xcode에서 직접 설치 (Debug) | sandbox | `api.sandbox.push.apple.com` |
+| TestFlight / App Store (Release) | production | `api.push.apple.com` |
+
+TestFlight로 배포하려면 `ios/CnuInfo/CnuInfo.entitlements`의 `aps-environment`를
+`production`으로 바꿔야 한다.
+
+## 동작
+
+- 알림 발송 지점은 `monitor_new_notices.py`의 새 공지 처리 구간이다. 텔레그램 전송 직후 보낸다.
+- 같은 공지를 두 번 알리지 않도록 최근 300건의 발송 이력을 `data/push_tokens.json`에 남긴다.
+- 알림 실패는 수집을 막지 않는다. 로그에 `[푸시 경고]`만 남는다.
+- APNs가 410(Unregistered) 또는 `BadDeviceToken`을 돌려주면 그 토큰을 자동으로 지운다.
+  앱을 지운 기기나 환경이 틀린 토큰이 쌓이지 않는다.
+- 알림 페이로드에 `notice_key`가 들어 있어, 탭하면 앱이 그 공지 상세로 이동한다.
