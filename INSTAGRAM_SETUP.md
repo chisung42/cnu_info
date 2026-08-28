@@ -164,7 +164,9 @@ curl -s -X POST -H "X-API-Key: $(cat .app_api_key)" \
 2. 이름은 아무거나(예: `CNU Info Push`), **Apple Push Notifications service (APNs)** 체크
 3. `Continue` → `Register` → **Download** (`AuthKey_XXXXXXXXXX.p8`)
    - **한 번만 내려받을 수 있다.** 잃어버리면 키를 새로 만들어야 한다.
-4. 화면의 **Key ID**(10자)를 적어 둔다. Team ID는 `54J7TC5NH2`다.
+4. 화면의 **Key ID**(10자)를 적어 둔다. 코드 서명 인증서 이름의 괄호 안 값은
+   Team ID가 아니다. Team ID는 프로비저닝 프로파일의 `TeamIdentifier`이거나
+   개발자 사이트 우측 상단 계정 정보에 있다. Team ID는 `7W7426UKBH`다.
 
 ### 2. 앱에 푸시 기능 켜기
 
@@ -183,7 +185,7 @@ chmod 600 /srv/cnuinfo/secrets/AuthKey_*.p8
 cat >> /srv/cnuinfo/.env <<'EOF'
 APNS_KEY_PATH=/srv/cnuinfo/secrets/AuthKey_XXXXXXXXXX.p8
 APNS_KEY_ID=XXXXXXXXXX
-APNS_TEAM_ID=54J7TC5NH2
+APNS_TEAM_ID=7W7426UKBH
 APNS_BUNDLE_ID=kr.moonhome.cnuinfo
 EOF
 sudo systemctl restart cnu-info-web cnu-info-monitor
