@@ -42,7 +42,26 @@ INSIGHT_METRICS = (
 )
 
 # 게시 후 이 기간 안의 글만 snapshot 대상으로 본다. 지표는 대부분 초기에 결정된다.
-SNAPSHOT_WINDOW_DAYS = 14
+SNAPSHOT_WINDOW_DAYS = 8
+# 분석에서 쓸 고정 관측 창(시간). 게시물마다 이 나이대의 표본을 한 번씩 확보한다.
+TARGET_WINDOWS = [1, 6, 24, 72, 168]
+
+
+def window_tolerance(window: float) -> float:
+    """해당 창의 표본으로 인정할 나이 오차(시간)."""
+    return max(0.3, window * 0.15)
+
+
+def missing_window(age_hours: float, existing_ages: list) -> float | None:
+    """지금 찍으면 채울 수 있는 창을 돌려준다. 채울 게 없으면 None."""
+    for window in TARGET_WINDOWS:
+        tol = window_tolerance(window)
+        if abs(age_hours - window) > tol:
+            continue
+        if any(abs(age - window) <= tol for age in existing_ages):
+            continue  # 이미 그 창의 표본이 있다
+        return window
+    return None
 # 호출 사이 간격(초). 시간당 호출 한도에 걸리지 않게 여유를 둔다.
 CALL_INTERVAL = 0.35
 # 한도 초과를 뜻하는 Graph API 오류 코드.
@@ -160,6 +179,26 @@ def parse_ts(value: str) -> datetime | None:
     return parsed
 
 
+def load_sample_ages(metrics_path: str) -> dict[str, list[float]]:
+    """media_id -> 이미 기록된 표본들의 나이(시간) 목록."""
+    ages: dict[str, list[float]] = {}
+    if not os.path.exists(metrics_path):
+        return ages
+    with open(metrics_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row.get("error") or row.get("age_hours") is None:
+                continue
+            ages.setdefault(row.get("media_id", ""), []).append(float(row["age_hours"]))
+    return ages
+
+
 def append_jsonl(path: str, row: dict) -> None:
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -178,6 +217,7 @@ def collect(data_dir: str, only_recent: bool, with_children: bool, limit: int) -
 
     index = igs._read_json(index_path)
     now = datetime.now(timezone.utc)
+    existing_ages = load_sample_ages(metrics_path) if only_recent else {}
 
     for item in media:
         media_id = item.get("id")
@@ -222,6 +262,12 @@ def collect(data_dir: str, only_recent: bool, with_children: bool, limit: int) -
         if not only_recent and entry.get("backfilled_at"):
             skipped_done += 1
             continue
+        if only_recent:
+            ages = existing_ages.get(media_id, [])
+            # 아직 한 번도 못 찍었으면 무조건 찍고, 그 뒤로는 빈 창만 채운다.
+            if ages and missing_window(age_hours, ages) is None:
+                skipped_done += 1
+                continue
         if limit and done >= limit:
             break
         try:
@@ -286,6 +332,44 @@ def collect(data_dir: str, only_recent: bool, with_children: bool, limit: int) -
     }
 
 
+def collect_children(data_dir: str, limit: int) -> dict:
+    """캐러셀 게시물의 장수를 채운다. 인사이트와 호출 예산이 겹치므로 따로 돈다."""
+    token = igs.refresh_token_if_needed(data_dir)
+    out = research_dir(data_dir)
+    index_path = os.path.join(out, "media_index.json")
+    index = igs._read_json(index_path)
+
+    done = 0
+    rate_limited = False
+    for media_id, entry in index.items():
+        if entry.get("child_count") is not None and entry.get("child_count") != "":
+            continue
+        if entry.get("media_type") != "CAROUSEL_ALBUM":
+            entry["child_count"] = 1
+            continue
+        if limit and done >= limit:
+            break
+        try:
+            entry["child_count"] = fetch_child_count(media_id, token)
+        except RateLimited:
+            rate_limited = True
+            break
+        except igs.InstagramAPIError as exc:
+            entry["children_error"] = str(exc)
+        done += 1
+        time.sleep(CALL_INTERVAL)
+
+    igs._write_json(index_path, index)
+    filled = sum(1 for e in index.values()
+                 if e.get("child_count") is not None and e.get("child_count") != "")
+    return {
+        "collected_now": done,
+        "with_child_count": filled,
+        "remaining": len(index) - filled,
+        "rate_limited": rate_limited,
+    }
+
+
 def snapshot_account(data_dir: str) -> dict:
     token = igs.refresh_token_if_needed(data_dir)
     out = research_dir(data_dir)
@@ -309,7 +393,7 @@ def snapshot_account(data_dir: str) -> dict:
 # 내보내기
 # ---------------------------------------------------------------------------
 
-WINDOWS = [1, 6, 24, 72, 168]
+WINDOWS = TARGET_WINDOWS
 METRIC_NAMES = ["views", "reach", "saved", "shares", "likes", "comments",
                 "total_interactions", "profile_visits", "follows"]
 
@@ -438,7 +522,7 @@ def export_csv(data_dir: str, path: str) -> dict:
             best_gap = None
             for sample in media_samples:
                 gap = abs(sample.get("age_hours", 0) - window)
-                if gap <= max(window * 0.35, 1.0) and (best_gap is None or gap < best_gap):
+                if gap <= window_tolerance(window) and (best_gap is None or gap < best_gap):
                     best, best_gap = sample, gap
             for metric in ["views", "reach", "saved", "shares"]:
                 row[f"{metric}_{window}h"] = (best or {}).get(metric, "")
@@ -456,7 +540,8 @@ def export_csv(data_dir: str, path: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command",
-                        choices=["backfill", "snapshot", "account", "export", "status"])
+                        choices=["backfill", "snapshot", "children",
+                                 "account", "export", "status"])
     parser.add_argument("--data-dir", default=os.environ.get("CNUINFO_DATA_DIR", "data"))
     parser.add_argument("--limit", type=int, default=0,
                         help="이번 실행에서 인사이트를 받을 게시물 수 상한(0=제한 없음)")
@@ -472,6 +557,8 @@ def main() -> int:
     elif args.command == "snapshot":
         result = collect(data_dir, only_recent=True,
                          with_children=args.children, limit=args.limit)
+    elif args.command == "children":
+        result = collect_children(data_dir, limit=args.limit)
     elif args.command == "account":
         result = snapshot_account(data_dir)
     elif args.command == "export":
